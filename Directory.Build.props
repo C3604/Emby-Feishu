@@ -1,0 +1,5 @@
+<Project>
+  <PropertyGroup>
+    <EmbyReferencePath Condition="'$(EmbyReferencePath)' == ''">$(MSBuildThisFileDirectory)lib\emby\4.9.5.0</EmbyReferencePath>
+  </PropertyGroup>
+</Project>

@@ -1,0 +1,31 @@
+# Build outputs
+bin/
+obj/
+artifacts/
+publish/
+
+# Test outputs
+TestResults/
+*.trx
+*.coverage
+*.coveragexml
+
+# Package outputs
+*.nupkg
+*.snupkg
+
+# IDE and user-specific files
+.vs/
+.vscode/
+.idea/
+*.user
+*.rsuser
+*.suo
+*.userprefs
+*.sln.docstates
+
+# OS files
+*.DS_Store
+
+# Local Emby reference assemblies
+lib/emby/
