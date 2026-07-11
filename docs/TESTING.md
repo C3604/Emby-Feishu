@@ -12,7 +12,7 @@ dotnet run --project tools/EmbyFeishu.SelfTest/EmbyFeishu.SelfTest.csproj
 
 ### 测试覆盖
 
-自测工具包含以下测试项（共 50 项）：
+自测工具包含以下测试项（共 74 项）：
 
 **媒体标题格式化（6 项）**
 - 电影标题
@@ -52,21 +52,34 @@ dotnet run --project tools/EmbyFeishu.SelfTest/EmbyFeishu.SelfTest.csproj
 - 停止播放消息各字段
 - 字段缺失时省略
 
-**播放状态去重（7 项）**
+**播放状态去重与多会话隔离**
 - Playing→Playing 不产生事件
 - Playing→Paused 产生暂停事件
 - Paused→Paused 去重
 - Paused→Playing 产生恢复事件
 - 播放停止后清理
+- 多会话状态互不干扰
+- 会话键构建规则（PlaySessionId 优先，缺失时降级组合）
+
+**安全脱敏**
+- 异常消息中移除完整 Webhook URL
+- 异常消息中移除裸 Token
+- 无敏感信息的消息保持原样
+- 飞书/Lark 域名识别、非飞书域名不阻断保存
+
+**测试推送配置**
+- 测试标志与结果字段行为
+- Webhook URL 格式校验
 
 ## 真实环境测试
 
-自测工具无法模拟的场景需要在真实 Emby 环境中验证：
+自测工具无法模拟的场景需在真实 Emby 环境中验证，完整分步清单见
+[REAL-ENVIRONMENT-VERIFICATION.md](REAL-ENVIRONMENT-VERIFICATION.md)，要点：
 
 1. 插件是否在 Emby 后台正常显示
 2. 配置页面是否正常渲染和保存
-3. 播放视频时是否收到飞书通知
-4. 停止播放是否收到停止通知
-5. 暂停/恢复通知是否正确去重
+3. 播放视频时是否收到飞书通知（开始/停止各一次）
+4. 暂停/恢复通知在高频进度事件下是否正确去重
+5. 多设备并发播放是否互不干扰
 6. 飞书不可用时是否影响播放
-7. 用户过滤是否正常工作
+7. **Emby 日志中是否确认不含完整 Webhook 地址**

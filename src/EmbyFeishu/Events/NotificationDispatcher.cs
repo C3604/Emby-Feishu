@@ -88,7 +88,7 @@ namespace EmbyFeishu.Events
         {
             var token = _cts.Token;
 
-            while (!token.IsCancellationRequested)
+            while (!token.IsCancellationRequested && !_disposed)
             {
                 try
                 {
@@ -98,14 +98,19 @@ namespace EmbyFeishu.Events
                 {
                     break;
                 }
+                catch (ObjectDisposedException)
+                {
+                    // 关闭竞态：信号量已释放，安全退出
+                    break;
+                }
 
-                if (token.IsCancellationRequested) break;
+                if (token.IsCancellationRequested || _disposed) break;
 
                 while (_queue.TryDequeue(out var evt))
                 {
                     Interlocked.Decrement(ref _queueCount);
 
-                    if (token.IsCancellationRequested) break;
+                    if (token.IsCancellationRequested || _disposed) break;
 
                     try
                     {

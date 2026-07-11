@@ -53,15 +53,7 @@ namespace EmbyFeishu.Configuration
                 {
                     errors.Add("Webhook 地址必须使用 HTTPS 协议。");
                 }
-                else
-                {
-                    var host = uri.Host.ToLowerInvariant();
-                    var isFeishu = host.Contains("feishu.cn") || host.Contains("larksuite.com");
-                    if (!isFeishu)
-                    {
-                        errors.Add("Webhook 地址的域名看起来不是飞书或 Lark，请确认地址是否正确。如需使用自定义域名，请忽略此警告重新保存。");
-                    }
-                }
+                // 域名是否为飞书/Lark 只作为非阻断性提示（见 IsLikelyFeishuDomain），不锁死自定义中转域名
             }
 
             if (options.RequestTimeoutSeconds < 3 || options.RequestTimeoutSeconds > 60)
@@ -75,6 +67,21 @@ namespace EmbyFeishu.Configuration
             }
 
             return errors;
+        }
+
+        /// <summary>
+        /// 判断 Webhook 域名是否像飞书或 Lark。返回 false 时仅作提示，不阻断保存。
+        /// </summary>
+        public static bool IsLikelyFeishuDomain(string webhookUrl)
+        {
+            if (string.IsNullOrWhiteSpace(webhookUrl))
+                return false;
+
+            if (!Uri.TryCreate(webhookUrl.Trim(), UriKind.Absolute, out var uri))
+                return false;
+
+            var host = uri.Host.ToLowerInvariant();
+            return host.Contains("feishu.cn") || host.Contains("larksuite.com");
         }
 
         /// <summary>

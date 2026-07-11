@@ -124,6 +124,22 @@ namespace EmbyFeishu.SelfTest
 
             AssertEqual("(空)", WebhookMasker.Mask(null), "null URL 脱敏");
             AssertEqual("(空)", WebhookMasker.Mask(""), "空字符串脱敏");
+
+            // 异常消息脱敏（防止完整 Webhook 或 Token 通过日志/界面泄露）
+            var url = "https://open.feishu.cn/open-apis/bot/v2/hook/abcdef123456";
+            var msgWithUrl = "请求失败: 无法连接到 " + url + " 服务器";
+            var sanitized1 = WebhookMasker.Sanitize(msgWithUrl, url);
+            Assert(!sanitized1.Contains(url), "Sanitize 移除完整 URL");
+            Assert(!sanitized1.Contains("abcdef123456"), "Sanitize 移除 Token");
+
+            var msgWithToken = "invalid token abcdef123456 in path";
+            var sanitized2 = WebhookMasker.Sanitize(msgWithToken, url);
+            Assert(!sanitized2.Contains("abcdef123456"), "Sanitize 移除裸 Token");
+
+            var plainMsg = "连接超时";
+            Assert(WebhookMasker.Sanitize(plainMsg, url) == plainMsg, "Sanitize 不影响无敏感信息的消息");
+            Assert(WebhookMasker.Sanitize(null, url) == null, "Sanitize null 安全");
+            Assert(WebhookMasker.Sanitize("消息", "") == "消息", "Sanitize 空 URL 时原样返回");
         }
 
         // ===== 用户过滤 =====
@@ -175,7 +191,10 @@ namespace EmbyFeishu.SelfTest
 
             var opts4 = new PluginOptions { Enabled = true, WebhookUrl = "https://example.com/webhook" };
             var errs4 = ConfigValidator.Validate(opts4);
-            Assert(errs4.Count > 0, "非飞书域名给出警告");
+            Assert(errs4.Count == 0, "非飞书域名不阻断保存（允许自定义中转地址）");
+            Assert(!ConfigValidator.IsLikelyFeishuDomain("https://example.com/webhook"), "非飞书域名被识别为非飞书");
+            Assert(ConfigValidator.IsLikelyFeishuDomain("https://open.feishu.cn/open-apis/bot/v2/hook/x"), "飞书域名被正确识别");
+            Assert(ConfigValidator.IsLikelyFeishuDomain("https://open.larksuite.com/open-apis/bot/v2/hook/x"), "Lark 域名被正确识别");
 
             var opts5 = new PluginOptions { Enabled = false, WebhookUrl = "" };
             var errs5 = ConfigValidator.Validate(opts5);
@@ -282,6 +301,28 @@ namespace EmbyFeishu.SelfTest
 
             tracker.OnPlaybackStopped(key);
             Assert(tracker.Count == 0, "播放停止后跟踪数量为 0");
+
+            // 多会话隔离：两个会话状态互不干扰
+            var t2 = new PlaybackStateTracker();
+            t2.OnPlaybackStarted("sessionA");
+            t2.OnPlaybackStarted("sessionB");
+            Assert(t2.Count == 2, "两个会话独立跟踪");
+            var a1 = t2.OnPlaybackProgress("sessionA", true);
+            Assert(a1 == PlaybackEventType.Paused, "会话A暂停");
+            var b1 = t2.OnPlaybackProgress("sessionB", false);
+            Assert(b1 == null, "会话A暂停不影响会话B状态");
+            var b2 = t2.OnPlaybackProgress("sessionB", true);
+            Assert(b2 == PlaybackEventType.Paused, "会话B独立产生暂停");
+            t2.OnPlaybackStopped("sessionA");
+            Assert(t2.Count == 1, "停止会话A后会话B仍存在");
+
+            // 会话键构建：PlaySessionId 优先，缺失时降级组合
+            AssertEqual("psid-1",
+                PlaybackStateTracker.GetSessionKey("psid-1", "sid", "item", "dev"),
+                "有 PlaySessionId 时用作键");
+            AssertEqual("sid|item|dev",
+                PlaybackStateTracker.GetSessionKey(null, "sid", "item", "dev"),
+                "无 PlaySessionId 时降级组合键");
         }
 
         // ===== 测试推送配置 =====

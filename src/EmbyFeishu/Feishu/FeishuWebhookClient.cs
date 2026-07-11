@@ -1,11 +1,13 @@
 using System;
 using System.IO;
+using System.Net;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using EmbyFeishu.Infrastructure;
 using MediaBrowser.Common.Net;
 using MediaBrowser.Model.Logging;
+using MediaBrowser.Model.Net;
 using MediaBrowser.Model.Serialization;
 
 namespace EmbyFeishu.Feishu
@@ -48,7 +50,10 @@ namespace EmbyFeishu.Feishu
                     RequestContent = jsonBody.AsMemory(),
                     TimeoutMs = timeoutMs,
                     CancellationToken = cancellationToken,
+                    // 关闭 Emby HttpClient 自带的请求/响应/错误日志，避免完整 Webhook 地址被写入 Emby 日志
                     LogErrors = false,
+                    LogRequest = false,
+                    LogResponse = false,
                     BufferContent = false
                 };
 
@@ -105,14 +110,38 @@ namespace EmbyFeishu.Feishu
                 _logger.Debug("[EmbyFeishu] 请求已取消 ({0})", maskedUrl);
                 return WebhookSendResult.Fail("请求已取消", false);
             }
+            catch (HttpException httpEx)
+            {
+                // 使用 Emby 提供的结构化信息判断是否可重试，而非匹配异常文本
+                var shouldRetry = httpEx.IsTimedOut || IsRetryableStatus(httpEx.StatusCode);
+                var desc = httpEx.StatusCode.HasValue
+                    ? string.Format("HTTP {0}", (int)httpEx.StatusCode.Value)
+                    : (httpEx.IsTimedOut ? "请求超时" : "网络请求异常");
+                var safe = WebhookMasker.Sanitize(httpEx.Message, webhookUrl);
+                _logger.Warn("[EmbyFeishu] Webhook 请求失败: {0} ({1})", desc, maskedUrl);
+                return WebhookSendResult.Fail(desc + "：" + safe, shouldRetry);
+            }
             catch (Exception ex)
             {
-                var isTimeout = ex.Message != null && ex.Message.IndexOf("timeout", StringComparison.OrdinalIgnoreCase) >= 0;
-                var isNetwork = ex is System.Net.WebException || ex is IOException;
-                var shouldRetry = isTimeout || isNetwork;
-                _logger.Warn("[EmbyFeishu] Webhook 请求失败: {0} ({1})", ex.Message, maskedUrl);
-                return WebhookSendResult.Fail(ex.Message, shouldRetry);
+                var isNetwork = ex is WebException || ex is IOException;
+                var safe = WebhookMasker.Sanitize(ex.Message, webhookUrl);
+                _logger.Warn("[EmbyFeishu] Webhook 请求失败: {0} ({1})", safe, maskedUrl);
+                return WebhookSendResult.Fail(safe, isNetwork);
             }
+        }
+
+        /// <summary>
+        /// 判断 HTTP 状态码是否值得重试：仅对 429 和 5xx 重试，4xx 视为配置/请求错误不重试。
+        /// </summary>
+        private static bool IsRetryableStatus(HttpStatusCode? code)
+        {
+            if (!code.HasValue)
+                return true; // 状态码未知，通常是网络层问题，允许一次重试
+
+            var c = (int)code.Value;
+            if (c == 429)
+                return true;
+            return c >= 500 && c <= 599;
         }
     }
 }

@@ -110,7 +110,7 @@ namespace EmbyFeishu
                     return;
 
                 var evt = BuildEvent(e, PlaybackEventType.Started);
-                var key = PlaybackStateTracker.GetSessionKey(evt.PlaySessionId, evt.SessionId, evt.ItemId, evt.DeviceName);
+                var key = BuildSessionKey(e);
                 _stateTracker.OnPlaybackStarted(key);
 
                 if (!options.NotifyPlaybackStarted)
@@ -144,7 +144,7 @@ namespace EmbyFeishu
                     return;
 
                 var isPaused = e.IsPaused;
-                var key = PlaybackStateTracker.GetSessionKey(e.PlaySessionId, e.Session?.Id, GetItemId(e), e.DeviceName);
+                var key = BuildSessionKey(e);
                 var stateChange = _stateTracker.OnPlaybackProgress(key, isPaused);
 
                 if (stateChange == null)
@@ -180,7 +180,7 @@ namespace EmbyFeishu
                 if (!UserFilter.ShouldNotify(userName, options.UserFilterMode, options.UserNames))
                     return;
 
-                var key = PlaybackStateTracker.GetSessionKey(e.PlaySessionId, e.Session?.Id, GetItemId(e), e.DeviceName);
+                var key = BuildSessionKey(e);
                 _stateTracker.OnPlaybackStopped(key);
 
                 if (!options.NotifyPlaybackStopped)
@@ -288,9 +288,14 @@ namespace EmbyFeishu
             return null;
         }
 
-        private string GetItemId(PlaybackProgressEventArgs e)
+        /// <summary>
+        /// 统一构建会话状态键，保证开始、进度、停止三个事件使用完全一致的键。
+        /// 优先使用 PlaySessionId；缺失时组合 SessionId、ItemId 和设备名。
+        /// </summary>
+        private static string BuildSessionKey(PlaybackProgressEventArgs e)
         {
-            return e.MediaInfo?.Id;
+            var deviceName = e.DeviceName ?? e.Session?.DeviceName;
+            return PlaybackStateTracker.GetSessionKey(e.PlaySessionId, e.Session?.Id, e.MediaInfo?.Id, deviceName);
         }
 
         private bool IsVideoItem(PlaybackProgressEventArgs e)

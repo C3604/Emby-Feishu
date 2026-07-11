@@ -62,6 +62,14 @@ namespace EmbyFeishu
         }
 
         /// <summary>
+        /// 供配置类等外部组件记录非阻断性警告日志
+        /// </summary>
+        public void LogWarning(string message)
+        {
+            _logger.Warn("[EmbyFeishu] {0}", message);
+        }
+
+        /// <summary>
         /// 配置保存前处理：执行测试推送
         /// </summary>
         protected override bool OnOptionsSaving(PluginOptions options)
@@ -129,7 +137,10 @@ namespace EmbyFeishu
                     RequestContent = jsonBody.AsMemory(),
                     TimeoutMs = options.RequestTimeoutSeconds * 1000,
                     CancellationToken = CancellationToken.None,
+                    // 关闭 Emby HttpClient 自带日志，避免完整 Webhook 地址写入 Emby 日志
                     LogErrors = false,
+                    LogRequest = false,
+                    LogResponse = false,
                     BufferContent = false
                 };
 
@@ -179,7 +190,9 @@ namespace EmbyFeishu
             }
             catch (Exception ex)
             {
-                var errMsg = ex.InnerException?.Message ?? ex.Message;
+                // 异常消息可能包含完整 Webhook 地址，脱敏后再写入界面/日志（LastTestResult 会被持久化到配置）
+                var rawMsg = ex.InnerException?.Message ?? ex.Message;
+                var errMsg = WebhookMasker.Sanitize(rawMsg, options.WebhookUrl);
                 options.LastTestResult = "❌ 测试失败：" + errMsg + " (" + DateTime.Now.ToString("HH:mm:ss") + ")";
                 _logger.Warn("[EmbyFeishu] 测试推送异常：{0} ({1})", errMsg, maskedUrl);
             }

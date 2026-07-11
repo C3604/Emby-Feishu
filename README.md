@@ -61,6 +61,8 @@ EmbyFeishu/
 - [部署文档](docs/DEPLOYMENT.md)
 - [测试文档](docs/TESTING.md)
 - [故障排查](docs/TROUBLESHOOTING.md)
+- [项目审查报告](docs/PROJECT-AUDIT-REPORT.md)
+- [真实环境验证清单](docs/REAL-ENVIRONMENT-VERIFICATION.md)
 
 ## 许可
 

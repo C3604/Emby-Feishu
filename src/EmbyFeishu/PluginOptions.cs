@@ -151,6 +151,15 @@ namespace EmbyFeishu
             }
 
             UserNames = Configuration.ConfigValidator.NormalizeUserNames(UserNames);
+
+            // 非飞书/Lark 域名仅作提示，不阻断保存（允许自定义中转地址）
+            if (!context.HasErrors
+                && !string.IsNullOrWhiteSpace(WebhookUrl)
+                && !Configuration.ConfigValidator.IsLikelyFeishuDomain(WebhookUrl))
+            {
+                Plugin.Instance?.LogWarning(
+                    "Webhook 域名不是飞书(feishu.cn)或 Lark(larksuite.com)，若为自定义中转地址可忽略此提示。");
+            }
         }
     }
 }
