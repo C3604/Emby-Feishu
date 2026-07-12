@@ -37,15 +37,18 @@ namespace EmbyFeishu.Configuration
         public static List<string> Validate(PluginOptions options)
         {
             var errors = new List<string>();
+            options.EnsureGroups();
 
-            if (options.Enabled && string.IsNullOrWhiteSpace(options.WebhookUrl))
+            var conn = options.FeishuConnection;
+
+            if (conn.Enabled && string.IsNullOrWhiteSpace(conn.WebhookUrl))
             {
                 errors.Add("启用插件时，飞书 Webhook 地址不能为空。");
             }
 
-            if (!string.IsNullOrWhiteSpace(options.WebhookUrl))
+            if (!string.IsNullOrWhiteSpace(conn.WebhookUrl))
             {
-                if (!Uri.TryCreate(options.WebhookUrl.Trim(), UriKind.Absolute, out var uri))
+                if (!Uri.TryCreate(conn.WebhookUrl.Trim(), UriKind.Absolute, out var uri))
                 {
                     errors.Add("Webhook 地址格式不正确，请输入完整的 URL。");
                 }
@@ -53,33 +56,24 @@ namespace EmbyFeishu.Configuration
                 {
                     errors.Add("Webhook 地址必须使用 HTTPS 协议。");
                 }
-                // 域名是否为飞书/Lark 只作为非阻断性提示（见 IsLikelyFeishuDomain），不锁死自定义中转域名
             }
 
-            if (options.RequestTimeoutSeconds < 3 || options.RequestTimeoutSeconds > 60)
-            {
+            if (conn.RequestTimeoutSeconds < 3 || conn.RequestTimeoutSeconds > 60)
                 errors.Add("请求超时时间必须在 3～60 秒之间。");
-            }
 
-            if (options.MinimumStopSeconds < 0 || options.MinimumStopSeconds > 600)
-            {
+            var pb = options.PlaybackNotification;
+            if (pb.MinimumStopSeconds < 0 || pb.MinimumStopSeconds > 600)
                 errors.Add("最短播放秒数必须在 0～600 之间。");
-            }
-
-            if (options.CompletionThresholdPercent < 50 || options.CompletionThresholdPercent > 100)
-            {
+            if (pb.CompletionThresholdPercent < 50 || pb.CompletionThresholdPercent > 100)
                 errors.Add("播放完成阈值必须在 50～100 之间。");
-            }
 
-            if (options.LibraryAggregationWindowSeconds < 10 || options.LibraryAggregationWindowSeconds > 600)
-            {
+            var lib = options.LibraryAndUserBehavior;
+            if (lib.LibraryAggregationWindowSeconds < 10 || lib.LibraryAggregationWindowSeconds > 600)
                 errors.Add("媒体库聚合窗口必须在 10～600 秒之间。");
-            }
 
-            if (options.MaximumNotificationsPerMinute < 1 || options.MaximumNotificationsPerMinute > 240)
-            {
+            var adv = options.AdvancedAndDiagnostics;
+            if (adv.MaximumNotificationsPerMinute < 1 || adv.MaximumNotificationsPerMinute > 240)
                 errors.Add("每分钟最大通知数必须在 1～240 之间。");
-            }
 
             return errors;
         }
@@ -137,6 +131,30 @@ namespace EmbyFeishu.Configuration
                 .ToArray();
 
             return string.Join(", ", names);
+        }
+
+        /// <summary>
+        /// 校验自定义关键词格式。返回 null 表示通过，否则为错误信息。
+        /// </summary>
+        public static string ValidateCustomKeyword(string keyword)
+        {
+            if (string.IsNullOrEmpty(keyword))
+                return null;
+
+            var trimmed = keyword.Trim();
+            if (trimmed.Length == 0)
+                return "自定义关键词不能全部由空格组成。";
+
+            if (trimmed.Contains("\n") || trimmed.Contains("\r") || trimmed.Contains("\t"))
+                return "自定义关键词不能包含换行、回车或制表符。";
+
+            foreach (var c in trimmed)
+            {
+                if (char.IsControl(c))
+                    return "自定义关键词不能包含控制字符。";
+            }
+
+            return null;
         }
     }
 }

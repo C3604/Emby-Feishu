@@ -1,6 +1,6 @@
 # 事件目录（EVENT-CATALOG）
 
-本插件（v1.3.0.0）支持的全部事件。所有事件均已对本地 Emby Server **4.9.5.0** DLL 反射核验存在。
+本插件（v1.4.0.0）支持的全部事件。所有事件均已对本地 Emby Server **4.9.5.0** DLL 反射核验存在。
 
 - **内部 EventType**：插件统一事件模型 `NotificationEvent.EventType`
 - **Emby 原始事件**：订阅的 Emby 接口事件

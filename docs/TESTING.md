@@ -7,10 +7,20 @@
 ### 运行自测
 
 ```bash
-dotnet run --project tools/EmbyFeishu.SelfTest/EmbyFeishu.SelfTest.csproj
+# 先构建整个解决方案，再运行自测
+dotnet build EmbyFeishu.sln -c Release
+dotnet run --project tools/EmbyFeishu.SelfTest/EmbyFeishu.SelfTest.csproj -c Release --no-build
 ```
 
-### 测试覆盖（共 150 项，全部通过）
+最新结果（v1.4.0.0）：
+
+```
+========================================
+  结果: 通过 235, 失败 0
+========================================
+```
+
+### 测试覆盖（共 235 项，全部通过）
 
 **媒体标题格式化**：电影 / 剧集（含/无季集号）/ 空值降级。
 
@@ -46,7 +56,13 @@ dotnet run --project tools/EmbyFeishu.SelfTest/EmbyFeishu.SelfTest.csproj
 
 **媒体库聚合**：少量逐条 + 同 ItemId 去重、超过上限转汇总、插件停止时安全刷新（Dispose）。
 
-**测试推送配置**：标志与结果字段、Webhook URL 校验。
+**测试推送配置**：标志与结果字段、Webhook URL 校验、Webhook 持久保存、测试通知逻辑。
+
+**配置分组与迁移**：8 个分组默认值、分组↔扁平双向同步、`ConfigSchemaVersion` 版本管理、旧配置迁移不覆盖用户值。
+
+**侧边栏入口**：`PluginPageInfo` 属性（`EnableInMainMenu`/`IsMainConfigPage` 等）验证。
+
+**飞书安全校验**：自定义关键词校验与注入（文本/卡片，已含不重复）、签名 HMAC-SHA256 固定测试向量、签名与关键词组合、安全装饰器综合。
 
 ## 真实环境测试
 

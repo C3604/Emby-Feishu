@@ -73,6 +73,9 @@ namespace EmbyFeishu
                 _webhookClient,
                 new FeishuTextNotificationFormatter(),
                 new FeishuCardNotificationFormatter(),
+                new FeishuMessageSecurityDecorator(
+                    new FeishuSignatureProvider(),
+                    new SystemUnixTimeProvider()),
                 _logger);
 
             _context = new NotificationContext(

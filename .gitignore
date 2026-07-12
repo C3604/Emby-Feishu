@@ -1,31 +1,69 @@
-# Build outputs
-bin/
-obj/
+# ===== Build =====
+**/bin/
+**/obj/
 artifacts/
 publish/
 
-# Test outputs
+# ===== Release output =====
+# release/ 下的构建产物默认不入库，只保留占位文件。
+release/*
+!release/.gitkeep
+
+# ===== IDE =====
+.vs/
+.vscode/
+.idea/
+*.suo
+*.user
+*.userosscache
+*.userprefs
+*.rsuser
+*.sln.docstates
+
+# Claude Code 工作区（worktree、临时会话产物）
+.claude/worktrees/
+
+# ===== Test and coverage =====
 TestResults/
+coverage/
+coverage.*
 *.trx
 *.coverage
 *.coveragexml
 
-# Package outputs
+# ===== Logs and temp =====
+*.log
+logs/
+temp/
+tmp/
+*.tmp
+*.bak
+*.orig
+*.cache
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ===== NuGet =====
 *.nupkg
 *.snupkg
+packages/
 
-# IDE and user-specific files
-.vs/
-.vscode/
-.idea/
-*.user
-*.rsuser
-*.suo
-*.userprefs
-*.sln.docstates
+# ===== Debug symbols and runtime metadata =====
+*.pdb
+*.deps.json
+*.runtimeconfig.json
 
-# OS files
-*.DS_Store
+# ===== Sensitive configuration =====
+.env
+.env.*
+*.secret
+secrets/
+appsettings.Local.json
 
-# Local Emby reference assemblies
+# ===== Local Emby reference assemblies =====
+# Emby 官方 DLL 为专有文件，不随仓库分发。
+# 请按 docs/BUILD.md 将 4.9.5.0 的 4 个 DLL 放入 lib/emby/4.9.5.0/ 后再编译。
 lib/emby/

@@ -1,427 +1,175 @@
 using System.ComponentModel;
+using System.IO;
 using Emby.Web.GenericEdit;
 using Emby.Web.GenericEdit.Validation;
+using EmbyFeishu.Configuration.Groups;
 using EmbyFeishu.Models;
 using MediaBrowser.Model.Attributes;
+using MediaBrowser.Model.GenericEdit;
+using MediaBrowser.Model.Serialization;
 
 namespace EmbyFeishu
 {
     /// <summary>
     /// 插件配置选项，由 Emby Simple UI 自动生成设置页面。
-    /// 分组顺序：飞书连接 → 消息格式 → 播放 → 登录与安全 → 媒体库 → 用户行为 →
-    /// 用户管理 → 计划任务 → Live TV → 服务器 → 高级过滤与限流 → 测试与诊断。
-    /// 所有旧字段名称与默认值保持不变，新字段缺失时使用安全默认值，保证旧配置继续加载。
+    /// 根页面组织为八个分组，每组继承 EditableOptionsBase。
+    /// 所有旧扁平字段保留（标记 Browsable(false)），保证旧配置文件向后兼容。
     /// </summary>
     public class PluginOptions : EditableOptionsBase
     {
         public override string EditorTitle => "Emby 飞书通知设置";
 
-        public override string EditorDescription => "配置飞书 Webhook 地址与各类事件通知。保存后立即生效，无需重启。";
+        public override string EditorDescription
+            => "配置飞书 Webhook 地址与各类事件通知。保存后立即生效，无需重启。";
 
-        /// <summary>配置架构版本，用于将来平滑迁移。0/缺失表示旧版本或全新安装。</summary>
+        /// <summary>配置架构版本，用于平滑迁移。0/缺失=旧版，1=v1.x，2=分组版。</summary>
         [Browsable(false)]
         public int ConfigSchemaVersion { get; set; } = 0;
 
-        // ========== 一、飞书连接 ==========
-
-        [DisplayName("① 启用插件")]
-        [Description("插件总开关，关闭后不会发送任何通知")]
-        public bool Enabled { get; set; } = false;
-
-        [DisplayName("① 飞书 Webhook 地址")]
-        [Description("飞书群机器人的 Webhook 地址，以 https:// 开头")]
-        public string WebhookUrl { get; set; } = "";
-
-        [DisplayName("① 请求超时（秒）")]
-        [Description("飞书 Webhook 请求超时时间，范围 3～60")]
-        [IsAdvanced]
-        [MinValue(3)]
-        [MaxValue(60)]
-        public int RequestTimeoutSeconds { get; set; } = 10;
-
-        // ========== 二、消息格式 ==========
-
-        [DisplayName("② 消息格式")]
-        [Description("Text=纯文本（默认，与旧版一致）；FeishuCard=飞书交互卡片")]
-        public MessageFormat MessageFormat { get; set; } = MessageFormat.Text;
-
-        [DisplayName("② 详细程度")]
-        [Description("Simple=极简；Standard=标准；Detailed=含技术细节；Custom=自定义（播放事件沿用下方字段开关）。默认 Custom 以保持旧版外观")]
-        public MessageDetailLevel MessageDetailLevel { get; set; } = MessageDetailLevel.Custom;
-
-        [DisplayName("② 卡片失败时回退文本")]
-        [Description("卡片发送失败时尝试改用文本发送一次")]
-        [IsAdvanced]
-        public bool FallbackToTextOnCardFailure { get; set; } = true;
-
-        [DisplayName("② 显示事件时间")]
-        [IsAdvanced]
-        public bool ShowEventTime { get; set; } = true;
-
-        [DisplayName("② 显示服务器名称")]
-        [IsAdvanced]
-        public bool ShowServerName { get; set; } = true;
-
-        [DisplayName("② 显示敏感技术细节")]
-        [Description("开启后在 Detailed 模式展示编码、分辨率等技术字段")]
-        [IsAdvanced]
-        public bool ShowSensitiveTechnicalDetails { get; set; } = false;
-
-        [DisplayName("② IP 显示方式")]
-        [Description("Hidden=隐藏；Masked=脱敏（默认）；Full=完整")]
-        [IsAdvanced]
-        public IpAddressDisplayMode IpAddressDisplayMode { get; set; } = IpAddressDisplayMode.Masked;
-
-        [DisplayName("② 设备 ID 显示方式")]
-        [Description("Hidden=隐藏；Masked=脱敏（默认）；Full=完整")]
-        [IsAdvanced]
-        public DeviceIdDisplayMode DeviceIdDisplayMode { get; set; } = DeviceIdDisplayMode.Masked;
-
-        // ========== 三、播放通知 ==========
-
-        [DisplayName("③ 通知播放开始")]
-        public bool NotifyPlaybackStarted { get; set; } = true;
-
-        [DisplayName("③ 通知播放停止")]
-        public bool NotifyPlaybackStopped { get; set; } = true;
-
-        [DisplayName("③ 通知播放暂停")]
-        [IsAdvanced]
-        public bool NotifyPlaybackPaused { get; set; } = false;
-
-        [DisplayName("③ 通知播放恢复")]
-        [IsAdvanced]
-        public bool NotifyPlaybackResumed { get; set; } = false;
-
-        [DisplayName("③ 通知播放完成")]
-        [Description("播放到片尾（PlayedToCompletion）时单独推送“播放完成”")]
-        public bool NotifyPlaybackCompleted { get; set; } = true;
-
-        [DisplayName("③ 通知中途放弃")]
-        [Description("未播放完成即停止时推送“放弃播放”")]
-        [IsAdvanced]
-        public bool NotifyPlaybackAbandoned { get; set; } = false;
+        // ===== 分组配置对象（UI 中通过 EditorGroup 展示） =====
+
+        public FeishuConnectionGroup FeishuConnection { get; set; } = new FeishuConnectionGroup();
+        public BotSecurityGroup BotSecurity { get; set; } = new BotSecurityGroup();
+        public MessageDisplayGroup MessageDisplay { get; set; } = new MessageDisplayGroup();
+        public PlaybackNotificationGroup PlaybackNotification { get; set; } = new PlaybackNotificationGroup();
+        public LoginAndUserGroup LoginAndUser { get; set; } = new LoginAndUserGroup();
+        public LibraryAndUserBehaviorGroup LibraryAndUserBehavior { get; set; } = new LibraryAndUserBehaviorGroup();
+        public TaskAndLiveTvAndServerGroup TaskAndLiveTvAndServer { get; set; } = new TaskAndLiveTvAndServerGroup();
+        public AdvancedAndDiagnosticsGroup AdvancedAndDiagnostics { get; set; } = new AdvancedAndDiagnosticsGroup();
+
+        // ===== 旧扁平字段（保留用于反序列化兼容，不在 UI 中显示） =====
+        // 每个旧字段上标记 Browsable(false)，使其不显示在配置 UI 中。
+        // 序列化时这些字段仍会被 JSON 序列化器读写，保证旧配置兼容。
+
+        [Browsable(false)] public bool Enabled { get; set; } = false;
+        [Browsable(false)] public string WebhookUrl { get; set; } = "";
+        [Browsable(false)] public int RequestTimeoutSeconds { get; set; } = 10;
+
+        [Browsable(false)] public MessageFormat MessageFormat { get; set; } = MessageFormat.Text;
+        [Browsable(false)] public MessageDetailLevel MessageDetailLevel { get; set; } = MessageDetailLevel.Custom;
+        [Browsable(false)] public bool FallbackToTextOnCardFailure { get; set; } = true;
+        [Browsable(false)] public bool ShowEventTime { get; set; } = true;
+        [Browsable(false)] public bool ShowServerName { get; set; } = true;
+        [Browsable(false)] public bool ShowSensitiveTechnicalDetails { get; set; } = false;
+        [Browsable(false)] public IpAddressDisplayMode IpAddressDisplayMode { get; set; } = IpAddressDisplayMode.Masked;
+        [Browsable(false)] public DeviceIdDisplayMode DeviceIdDisplayMode { get; set; } = DeviceIdDisplayMode.Masked;
+
+        [Browsable(false)] public bool NotifyPlaybackStarted { get; set; } = true;
+        [Browsable(false)] public bool NotifyPlaybackStopped { get; set; } = true;
+        [Browsable(false)] public bool NotifyPlaybackPaused { get; set; } = false;
+        [Browsable(false)] public bool NotifyPlaybackResumed { get; set; } = false;
+        [Browsable(false)] public bool NotifyPlaybackCompleted { get; set; } = true;
+        [Browsable(false)] public bool NotifyPlaybackAbandoned { get; set; } = false;
+        [Browsable(false)] public bool NotifyPlaybackMethodChanged { get; set; } = false;
+        [Browsable(false)] public bool NotifyPlaybackMilestones { get; set; } = false;
+        [Browsable(false)] public string PlaybackMilestones { get; set; } = "25,50,75";
+        [Browsable(false)] public int MinimumStopSeconds { get; set; } = 5;
+        [Browsable(false)] public int CompletionThresholdPercent { get; set; } = 90;
+        [Browsable(false)] public bool OnlyVideo { get; set; } = true;
+
+        [Browsable(false)] public bool NotifyAuthenticationSucceeded { get; set; } = false;
+        [Browsable(false)] public bool NotifyAuthenticationFailed { get; set; } = true;
+        [Browsable(false)] public bool NotifySessionStarted { get; set; } = false;
+        [Browsable(false)] public bool NotifySessionEnded { get; set; } = false;
+        [Browsable(false)] public bool NotifyRemoteControlDisconnected { get; set; } = false;
+        [Browsable(false)] public bool NotifyPartyJoined { get; set; } = false;
+        [Browsable(false)] public bool NotifyPartyLeft { get; set; } = false;
+
+        [Browsable(false)] public bool NotifyUserLockedOut { get; set; } = true;
+        [Browsable(false)] public bool NotifyUserPasswordChanged { get; set; } = true;
+        [Browsable(false)] public bool NotifyUserCreated { get; set; } = false;
+        [Browsable(false)] public bool NotifyUserDeleted { get; set; } = false;
+        [Browsable(false)] public bool NotifyUserUpdated { get; set; } = false;
+        [Browsable(false)] public bool NotifyUserPolicyUpdated { get; set; } = false;
+        [Browsable(false)] public bool NotifyUserConfigurationUpdated { get; set; } = false;
+
+        [Browsable(false)] public bool NotifyNewMovies { get; set; } = false;
+        [Browsable(false)] public bool NotifyNewEpisodes { get; set; } = false;
+        [Browsable(false)] public bool NotifyNewMusic { get; set; } = false;
+        [Browsable(false)] public bool NotifyOtherNewItems { get; set; } = false;
+        [Browsable(false)] public bool NotifyItemsRemoved { get; set; } = false;
+        [Browsable(false)] public bool NotifyItemsUpdated { get; set; } = false;
+        [Browsable(false)] public bool EnableLibraryAggregation { get; set; } = true;
+        [Browsable(false)] public int LibraryAggregationWindowSeconds { get; set; } = 60;
+        [Browsable(false)] public int MaximumIndividualLibraryMessages { get; set; } = 5;
+
+        [Browsable(false)] public bool NotifyFavoriteAdded { get; set; } = false;
+        [Browsable(false)] public bool NotifyFavoriteRemoved { get; set; } = false;
+        [Browsable(false)] public bool NotifyMarkedPlayed { get; set; } = false;
+        [Browsable(false)] public bool NotifyMarkedUnplayed { get; set; } = false;
+        [Browsable(false)] public bool NotifyUserRatingChanged { get; set; } = false;
+
+        [Browsable(false)] public bool NotifyTaskFailed { get; set; } = true;
+        [Browsable(false)] public bool NotifyTaskCompleted { get; set; } = false;
+        [Browsable(false)] public bool NotifyTaskCancelled { get; set; } = false;
+        [Browsable(false)] public bool NotifyLibraryScanStarted { get; set; } = false;
+        [Browsable(false)] public bool NotifyLibraryScanCompleted { get; set; } = true;
+        [Browsable(false)] public bool NotifyMetadataRefreshCompleted { get; set; } = false;
+        [Browsable(false)] public bool NotifyBackupCompleted { get; set; } = false;
+
+        [Browsable(false)] public bool EnableLiveTvNotifications { get; set; } = false;
+        [Browsable(false)] public bool NotifyRecordingStarted { get; set; } = false;
+        [Browsable(false)] public bool NotifyRecordingEnded { get; set; } = false;
+        [Browsable(false)] public bool NotifyTimerCreated { get; set; } = false;
+        [Browsable(false)] public bool NotifyTimerUpdated { get; set; } = false;
+        [Browsable(false)] public bool NotifyTimerCancelled { get; set; } = false;
+        [Browsable(false)] public bool NotifySeriesTimerCreated { get; set; } = false;
+        [Browsable(false)] public bool NotifySeriesTimerUpdated { get; set; } = false;
+        [Browsable(false)] public bool NotifySeriesTimerCancelled { get; set; } = false;
+
+        [Browsable(false)] public bool NotifyServerStarted { get; set; } = true;
+        [Browsable(false)] public bool NotifyServerStopping { get; set; } = false;
+        [Browsable(false)] public bool NotifyUpdateAvailable { get; set; } = true;
+        [Browsable(false)] public bool NotifyApplicationUpdated { get; set; } = true;
+        [Browsable(false)] public bool NotifyRestartRequired { get; set; } = true;
+        [Browsable(false)] public bool NotifyMaintenanceModeEntered { get; set; } = false;
+        [Browsable(false)] public bool NotifyMaintenanceModeExited { get; set; } = false;
+
+        [Browsable(false)] public UserFilterMode UserFilterMode { get; set; } = UserFilterMode.All;
+        [Browsable(false)] public string UserNames { get; set; } = "";
 
-        [DisplayName("③ 通知播放方式变化")]
-        [Description("直放/直接串流/转码状态发生变化时通知")]
-        [IsAdvanced]
-        public bool NotifyPlaybackMethodChanged { get; set; } = false;
+        [Browsable(false)] public int MaximumNotificationsPerMinute { get; set; } = 30;
+        [Browsable(false)] public bool SecurityEventsBypassRateLimit { get; set; } = true;
+        [Browsable(false)] public bool AggregateWhenRateLimited { get; set; } = true;
 
-        [DisplayName("③ 通知播放进度里程碑")]
-        [IsAdvanced]
-        public bool NotifyPlaybackMilestones { get; set; } = false;
+        [Browsable(false)] public bool IncludeUserName { get; set; } = true;
+        [Browsable(false)] public bool IncludeMediaTitle { get; set; } = true;
+        [Browsable(false)] public bool IncludeMediaType { get; set; } = false;
+        [Browsable(false)] public bool IncludeSeriesEpisode { get; set; } = true;
+        [Browsable(false)] public bool IncludeClientName { get; set; } = true;
+        [Browsable(false)] public bool IncludeDeviceName { get; set; } = true;
+        [Browsable(false)] public bool IncludePlaybackPosition { get; set; } = false;
+        [Browsable(false)] public bool IncludePlayedToCompletion { get; set; } = true;
 
-        [DisplayName("③ 里程碑阈值（%）")]
-        [Description("逗号分隔的百分比，如 25,50,75")]
-        [IsAdvanced]
-        public string PlaybackMilestones { get; set; } = "25,50,75";
-
-        [DisplayName("③ 最短播放秒数")]
-        [Description("播放时长不足此秒数时不发送停止/放弃通知，范围 0～600")]
-        [IsAdvanced]
-        [MinValue(0)]
-        [MaxValue(600)]
-        public int MinimumStopSeconds { get; set; } = 5;
+        [Browsable(false)] public bool SendTestNotification { get; set; } = false;
+        [Browsable(false)] public string LastTestResult { get; set; } = "";
 
-        [DisplayName("③ 播放完成阈值（%）")]
-        [Description("进度达到此百分比视为播放完成，范围 50～100")]
-        [IsAdvanced]
-        [MinValue(50)]
-        [MaxValue(100)]
-        public int CompletionThresholdPercent { get; set; } = 90;
+        // ===== 新增安全字段（仅在根层级存储，不在分组 UI 中显示） =====
 
-        [DisplayName("③ 仅通知视频播放")]
-        [Description("开启后只有视频类型的播放会触发通知，忽略音频等")]
-        public bool OnlyVideo { get; set; } = true;
+        /// <summary>是否启用自定义关键词（旧字段兼容）</summary>
+        [Browsable(false)] public bool EnableCustomKeyword { get; set; } = false;
 
-        // ========== 四、登录与安全 ==========
-
-        [DisplayName("④ 通知登录成功")]
-        [IsAdvanced]
-        public bool NotifyAuthenticationSucceeded { get; set; } = false;
+        /// <summary>自定义关键词（旧字段兼容）</summary>
+        [Browsable(false)] public string CustomKeyword { get; set; } = "";
 
-        [DisplayName("④ 通知登录失败")]
-        public bool NotifyAuthenticationFailed { get; set; } = true;
+        /// <summary>是否启用签名校验（旧字段兼容）</summary>
+        [Browsable(false)] public bool EnableSignatureVerification { get; set; } = false;
 
-        [DisplayName("④ 通知会话开始")]
-        [IsAdvanced]
-        public bool NotifySessionStarted { get; set; } = false;
+        /// <summary>签名密钥（存储真实值，不在 UI 中直接暴露，旧字段兼容）</summary>
+        [Browsable(false)] public string SignatureSecret { get; set; } = "";
 
-        [DisplayName("④ 通知会话结束")]
-        [IsAdvanced]
-        public bool NotifySessionEnded { get; set; } = false;
+        // ===== UI 输入临时字段（不在序列化中保存到持久配置） =====
 
-        [DisplayName("④ 通知远程控制断开")]
-        [IsAdvanced]
-        public bool NotifyRemoteControlDisconnected { get; set; } = false;
+        /// <summary>
+        /// UI 输入的签名密钥临时字段。不为空时表示用户输入了新密钥。
+        /// 此字段仅用于 GenericEdit 界面交互，不应被持久化为第二份密钥。
+        /// </summary>
+        [Browsable(false)]
+        public string SignatureSecretInput { get; set; } = "";
 
-        [DisplayName("④ 通知加入同步播放")]
-        [IsAdvanced]
-        public bool NotifyPartyJoined { get; set; } = false;
-
-        [DisplayName("④ 通知离开同步播放")]
-        [IsAdvanced]
-        public bool NotifyPartyLeft { get; set; } = false;
-
-        // ========== 五、用户管理 ==========
-
-        [DisplayName("⑤ 通知用户被锁定")]
-        public bool NotifyUserLockedOut { get; set; } = true;
-
-        [DisplayName("⑤ 通知修改密码")]
-        public bool NotifyUserPasswordChanged { get; set; } = true;
-
-        [DisplayName("⑤ 通知创建用户")]
-        [IsAdvanced]
-        public bool NotifyUserCreated { get; set; } = false;
-
-        [DisplayName("⑤ 通知删除用户")]
-        [IsAdvanced]
-        public bool NotifyUserDeleted { get; set; } = false;
-
-        [DisplayName("⑤ 通知更新用户")]
-        [IsAdvanced]
-        public bool NotifyUserUpdated { get; set; } = false;
-
-        [DisplayName("⑤ 通知更新用户策略")]
-        [IsAdvanced]
-        public bool NotifyUserPolicyUpdated { get; set; } = false;
-
-        [DisplayName("⑤ 通知更新用户配置")]
-        [IsAdvanced]
-        public bool NotifyUserConfigurationUpdated { get; set; } = false;
-
-        // ========== 六、媒体库 ==========
-
-        [DisplayName("⑥ 通知新增电影")]
-        [IsAdvanced]
-        public bool NotifyNewMovies { get; set; } = false;
-
-        [DisplayName("⑥ 通知新增剧集")]
-        [IsAdvanced]
-        public bool NotifyNewEpisodes { get; set; } = false;
-
-        [DisplayName("⑥ 通知新增音乐")]
-        [IsAdvanced]
-        public bool NotifyNewMusic { get; set; } = false;
-
-        [DisplayName("⑥ 通知其他新增项目")]
-        [IsAdvanced]
-        public bool NotifyOtherNewItems { get; set; } = false;
-
-        [DisplayName("⑥ 通知项目删除")]
-        [IsAdvanced]
-        public bool NotifyItemsRemoved { get; set; } = false;
-
-        [DisplayName("⑥ 通知项目更新")]
-        [IsAdvanced]
-        public bool NotifyItemsUpdated { get; set; } = false;
-
-        [DisplayName("⑥ 启用媒体库聚合")]
-        [Description("短时间内大量新增/更新合并为汇总消息，避免消息风暴")]
-        [IsAdvanced]
-        public bool EnableLibraryAggregation { get; set; } = true;
-
-        [DisplayName("⑥ 聚合窗口（秒）")]
-        [Description("范围 10～600")]
-        [IsAdvanced]
-        [MinValue(10)]
-        [MaxValue(600)]
-        public int LibraryAggregationWindowSeconds { get; set; } = 60;
-
-        [DisplayName("⑥ 逐条推送上限")]
-        [Description("同一聚合窗口内超过此数量则改为汇总")]
-        [IsAdvanced]
-        [MinValue(0)]
-        [MaxValue(50)]
-        public int MaximumIndividualLibraryMessages { get; set; } = 5;
-
-        // ========== 七、用户行为（用户媒体数据）==========
-
-        [DisplayName("⑦ 通知添加收藏")]
-        [IsAdvanced]
-        public bool NotifyFavoriteAdded { get; set; } = false;
-
-        [DisplayName("⑦ 通知取消收藏")]
-        [IsAdvanced]
-        public bool NotifyFavoriteRemoved { get; set; } = false;
-
-        [DisplayName("⑦ 通知标记已看")]
-        [IsAdvanced]
-        public bool NotifyMarkedPlayed { get; set; } = false;
-
-        [DisplayName("⑦ 通知标记未看")]
-        [IsAdvanced]
-        public bool NotifyMarkedUnplayed { get; set; } = false;
-
-        [DisplayName("⑦ 通知评分变化")]
-        [IsAdvanced]
-        public bool NotifyUserRatingChanged { get; set; } = false;
-
-        // ========== 八、计划任务 ==========
-
-        [DisplayName("⑧ 通知任务失败")]
-        public bool NotifyTaskFailed { get; set; } = true;
-
-        [DisplayName("⑧ 通知任务完成")]
-        [IsAdvanced]
-        public bool NotifyTaskCompleted { get; set; } = false;
-
-        [DisplayName("⑧ 通知任务取消")]
-        [IsAdvanced]
-        public bool NotifyTaskCancelled { get; set; } = false;
-
-        [DisplayName("⑧ 通知媒体库扫描开始")]
-        [IsAdvanced]
-        public bool NotifyLibraryScanStarted { get; set; } = false;
-
-        [DisplayName("⑧ 通知媒体库扫描完成")]
-        public bool NotifyLibraryScanCompleted { get; set; } = true;
-
-        [DisplayName("⑧ 通知元数据刷新完成")]
-        [IsAdvanced]
-        public bool NotifyMetadataRefreshCompleted { get; set; } = false;
-
-        [DisplayName("⑧ 通知备份完成")]
-        [IsAdvanced]
-        public bool NotifyBackupCompleted { get; set; } = false;
-
-        // ========== 九、Live TV ==========
-
-        [DisplayName("⑨ 启用 Live TV 通知")]
-        [Description("服务器未启用 Live TV 时本组不生效")]
-        [IsAdvanced]
-        public bool EnableLiveTvNotifications { get; set; } = false;
-
-        [DisplayName("⑨ 通知开始录制")]
-        [IsAdvanced]
-        public bool NotifyRecordingStarted { get; set; } = false;
-
-        [DisplayName("⑨ 通知结束录制")]
-        [IsAdvanced]
-        public bool NotifyRecordingEnded { get; set; } = false;
-
-        [DisplayName("⑨ 通知创建定时")]
-        [IsAdvanced]
-        public bool NotifyTimerCreated { get; set; } = false;
-
-        [DisplayName("⑨ 通知更新定时")]
-        [IsAdvanced]
-        public bool NotifyTimerUpdated { get; set; } = false;
-
-        [DisplayName("⑨ 通知取消定时")]
-        [IsAdvanced]
-        public bool NotifyTimerCancelled { get; set; } = false;
-
-        [DisplayName("⑨ 通知创建连续定时")]
-        [IsAdvanced]
-        public bool NotifySeriesTimerCreated { get; set; } = false;
-
-        [DisplayName("⑨ 通知更新连续定时")]
-        [IsAdvanced]
-        public bool NotifySeriesTimerUpdated { get; set; } = false;
-
-        [DisplayName("⑨ 通知取消连续定时")]
-        [IsAdvanced]
-        public bool NotifySeriesTimerCancelled { get; set; } = false;
-
-        // ========== 十、服务器状态 ==========
-
-        [DisplayName("⑩ 通知服务器启动")]
-        public bool NotifyServerStarted { get; set; } = true;
-
-        [DisplayName("⑩ 通知服务器停止")]
-        [IsAdvanced]
-        public bool NotifyServerStopping { get; set; } = false;
-
-        [DisplayName("⑩ 通知有可用更新")]
-        public bool NotifyUpdateAvailable { get; set; } = true;
-
-        [DisplayName("⑩ 通知已应用更新")]
-        public bool NotifyApplicationUpdated { get; set; } = true;
-
-        [DisplayName("⑩ 通知需要重启")]
-        public bool NotifyRestartRequired { get; set; } = true;
-
-        [DisplayName("⑩ 通知进入维护模式")]
-        [IsAdvanced]
-        public bool NotifyMaintenanceModeEntered { get; set; } = false;
-
-        [DisplayName("⑩ 通知退出维护模式")]
-        [IsAdvanced]
-        public bool NotifyMaintenanceModeExited { get; set; } = false;
-
-        // ========== 十一、高级过滤与限流 ==========
-
-        [DisplayName("⑪ 用户过滤模式")]
-        [Description("All=所有用户；IncludeOnly=仅通知指定用户；Exclude=排除指定用户。仅作用于播放/用户行为类事件")]
-        [IsAdvanced]
-        public Models.UserFilterMode UserFilterMode { get; set; } = Models.UserFilterMode.All;
-
-        [DisplayName("⑪ 用户名列表")]
-        [Description("逗号、分号或换行分隔的用户名")]
-        [IsAdvanced]
-        [EditMultiline(3)]
-        public string UserNames { get; set; } = "";
-
-        [DisplayName("⑪ 每分钟最大通知数")]
-        [Description("超过后普通通知被限流或聚合，范围 1～240")]
-        [IsAdvanced]
-        [MinValue(1)]
-        [MaxValue(240)]
-        public int MaximumNotificationsPerMinute { get; set; } = 30;
-
-        [DisplayName("⑪ 安全事件豁免限流")]
-        [IsAdvanced]
-        public bool SecurityEventsBypassRateLimit { get; set; } = true;
-
-        [DisplayName("⑪ 限流时聚合")]
-        [IsAdvanced]
-        public bool AggregateWhenRateLimited { get; set; } = true;
-
-        // ---- 自定义模式下的播放字段开关（旧字段，保持不变）----
-
-        [DisplayName("⑪ [自定义]显示用户名")]
-        [IsAdvanced]
-        public bool IncludeUserName { get; set; } = true;
-
-        [DisplayName("⑪ [自定义]显示媒体标题")]
-        [IsAdvanced]
-        public bool IncludeMediaTitle { get; set; } = true;
-
-        [DisplayName("⑪ [自定义]显示媒体类型")]
-        [IsAdvanced]
-        public bool IncludeMediaType { get; set; } = false;
-
-        [DisplayName("⑪ [自定义]显示剧集信息")]
-        [IsAdvanced]
-        public bool IncludeSeriesEpisode { get; set; } = true;
-
-        [DisplayName("⑪ [自定义]显示客户端名称")]
-        [IsAdvanced]
-        public bool IncludeClientName { get; set; } = true;
-
-        [DisplayName("⑪ [自定义]显示设备名称")]
-        [IsAdvanced]
-        public bool IncludeDeviceName { get; set; } = true;
-
-        [DisplayName("⑪ [自定义]显示播放位置")]
-        [IsAdvanced]
-        public bool IncludePlaybackPosition { get; set; } = false;
-
-        [DisplayName("⑪ [自定义]显示是否播放完成")]
-        [IsAdvanced]
-        public bool IncludePlayedToCompletion { get; set; } = true;
-
-        // ========== 十二、测试与诊断 ==========
-
-        [DisplayName("⑫ 发送测试通知")]
-        [Description("勾选后点击保存，向飞书发送一条测试消息。发送后自动取消勾选")]
-        public bool SendTestNotification { get; set; } = false;
-
-        [DisplayName("⑫ 上次测试结果")]
-        [Description("显示最近一次测试推送的结果")]
-        public string LastTestResult { get; set; } = "";
+        /// <summary>签名密钥状态</summary>
+        [Browsable(false)]
+        public string SignatureSecretStatus { get; set; } = "未配置";
 
         /// <summary>
         /// 配置校验，由 Emby Simple UI 框架在保存时调用。
@@ -430,45 +178,424 @@ namespace EmbyFeishu
         {
             base.Validate(context);
 
-            // 一次性配置迁移与规范化
+            // 初始化分组对象
+            EnsureGroups();
+
+            // 第一步：将 UI 输入从分组对象同步到旧扁平字段（捕获用户输入）
+            SyncFromGroups();
+
+            // 第二步：配置迁移（仅在版本号过低时执行一次性迁移）
             Configuration.ConfigMigrator.Apply(this);
 
-            if (SendTestNotification)
-            {
-                if (string.IsNullOrWhiteSpace(WebhookUrl))
-                {
-                    context.AddValidationError("发送测试通知前，请先填写飞书 Webhook 地址。");
-                    SendTestNotification = false;
-                    return;
-                }
+            // 不再调用 SyncToGroups()——那会用旧扁平字段覆盖用户刚输入的分组值
 
-                var urlErrors = Configuration.ConfigValidator.ValidateWebhookUrl(WebhookUrl);
+            // 校验 Webhook 格式（仅提示，不阻断）
+            if (!string.IsNullOrWhiteSpace(FeishuConnection.WebhookUrl))
+            {
+                var urlErrors = Configuration.ConfigValidator.ValidateWebhookUrl(FeishuConnection.WebhookUrl);
                 foreach (var msg in urlErrors)
                 {
                     context.AddValidationError(msg);
                 }
+            }
 
-                if (context.HasErrors)
+            // 关键词校验
+            if (BotSecurity.EnableCustomKeyword)
+            {
+                var kw = (BotSecurity.CustomKeyword ?? "").Trim();
+                BotSecurity.CustomKeyword = kw;
+
+                if (string.IsNullOrEmpty(kw))
                 {
-                    SendTestNotification = false;
-                    return;
+                    context.AddValidationError("启用自定义关键词时，关键词不能为空。");
+                }
+                else if (kw.Contains("\n") || kw.Contains("\r") || kw.Contains("\t"))
+                {
+                    context.AddValidationError("自定义关键词不能包含换行、回车或制表符。");
+                }
+                else
+                {
+                    // 检查其他控制字符
+                    bool hasControl = false;
+                    foreach (var c in kw)
+                    {
+                        if (char.IsControl(c))
+                        {
+                            hasControl = true;
+                            break;
+                        }
+                    }
+                    if (hasControl)
+                    {
+                        context.AddValidationError("自定义关键词不能包含控制字符。");
+                    }
                 }
             }
 
+            // 签名校验
+            if (BotSecurity.EnableSignatureVerification)
+            {
+                // 输入了新密钥：替换已有密钥
+                var newInput = BotSecurity.SignatureSecretInput?.Trim() ?? "";
+                if (!string.IsNullOrEmpty(newInput))
+                {
+                    SignatureSecret = newInput;
+                    BotSecurity.SignatureSecretInput = "";
+                    SignatureSecretStatus = "已配置";
+                }
+                else
+                {
+                    // 空输入表示保持原密钥。若原本就没有密钥，报错。
+                    if (string.IsNullOrEmpty(SignatureSecret))
+                    {
+                        context.AddValidationError("启用签名校验时，必须填写签名密钥。");
+                    }
+                }
+
+                // 密钥格式校验
+                if (!string.IsNullOrEmpty(SignatureSecret)
+                    && (SignatureSecret.Contains("\n") || SignatureSecret.Contains("\r") || SignatureSecret.Contains("\t")))
+                {
+                    context.AddValidationError("签名密钥不能包含换行、回车或制表符。");
+                }
+            }
+            else
+            {
+                // 关闭签名时：若用户输入了新密钥则保存（供未来开启时使用）
+                var newInput = BotSecurity.SignatureSecretInput?.Trim() ?? "";
+                if (!string.IsNullOrEmpty(newInput))
+                {
+                    SignatureSecret = newInput;
+                    SignatureSecretStatus = "已配置";
+                }
+                BotSecurity.SignatureSecretInput = "";
+            }
+
+            // 更新签名状态
+            if (string.IsNullOrEmpty(SignatureSecret))
+            {
+                SignatureSecretStatus = "未配置";
+            }
+            else
+            {
+                SignatureSecretStatus = "已配置";
+            }
+            BotSecurity.SignatureSecretStatus = SignatureSecretStatus;
+
+            // 一般校验
             var configErrors = Configuration.ConfigValidator.Validate(this);
             foreach (var msg in configErrors)
             {
                 context.AddValidationError(msg);
             }
 
-            UserNames = Configuration.ConfigValidator.NormalizeUserNames(UserNames);
+            // 用户名规范化
+            LoginAndUser.UserNames = Configuration.ConfigValidator.NormalizeUserNames(LoginAndUser.UserNames);
 
             if (!context.HasErrors
-                && !string.IsNullOrWhiteSpace(WebhookUrl)
-                && !Configuration.ConfigValidator.IsLikelyFeishuDomain(WebhookUrl))
+                && !string.IsNullOrWhiteSpace(FeishuConnection.WebhookUrl)
+                && !Configuration.ConfigValidator.IsLikelyFeishuDomain(FeishuConnection.WebhookUrl))
             {
                 Plugin.Instance?.LogWarning(
                     "Webhook 域名不是飞书(feishu.cn)或 Lark(larksuite.com)，若为自定义中转地址可忽略此提示。");
+            }
+        }
+
+        /// <summary>
+        /// 初始化所有分组对象，防止 null 引用。
+        /// </summary>
+        public void EnsureGroups()
+        {
+            if (FeishuConnection == null) FeishuConnection = new FeishuConnectionGroup();
+            if (BotSecurity == null) BotSecurity = new BotSecurityGroup();
+            if (MessageDisplay == null) MessageDisplay = new MessageDisplayGroup();
+            if (PlaybackNotification == null) PlaybackNotification = new PlaybackNotificationGroup();
+            if (LoginAndUser == null) LoginAndUser = new LoginAndUserGroup();
+            if (LibraryAndUserBehavior == null) LibraryAndUserBehavior = new LibraryAndUserBehaviorGroup();
+            if (TaskAndLiveTvAndServer == null) TaskAndLiveTvAndServer = new TaskAndLiveTvAndServerGroup();
+            if (AdvancedAndDiagnostics == null) AdvancedAndDiagnostics = new AdvancedAndDiagnosticsGroup();
+        }
+
+        /// <summary>
+        /// 将旧扁平字段的值同步到分组对象。
+        /// </summary>
+        public void SyncToGroups()
+        {
+            EnsureGroups();
+
+            // 飞书连接
+            FeishuConnection.Enabled = Enabled;
+            FeishuConnection.WebhookUrl = WebhookUrl ?? "";
+            FeishuConnection.RequestTimeoutSeconds = RequestTimeoutSeconds;
+
+            // 机器人安全
+            BotSecurity.EnableCustomKeyword = EnableCustomKeyword;
+            BotSecurity.CustomKeyword = CustomKeyword ?? "";
+            BotSecurity.EnableSignatureVerification = EnableSignatureVerification;
+            BotSecurity.SignatureSecretStatus = !string.IsNullOrEmpty(SignatureSecret) ? "已配置" : "未配置";
+
+            // 消息显示
+            MessageDisplay.MessageFormat = MessageFormat;
+            MessageDisplay.MessageDetailLevel = MessageDetailLevel;
+            MessageDisplay.ShowServerName = ShowServerName;
+            MessageDisplay.ShowEventTime = ShowEventTime;
+            MessageDisplay.IpAddressDisplayMode = IpAddressDisplayMode;
+            MessageDisplay.DeviceIdDisplayMode = DeviceIdDisplayMode;
+            MessageDisplay.FallbackToTextOnCardFailure = FallbackToTextOnCardFailure;
+            MessageDisplay.ShowSensitiveTechnicalDetails = ShowSensitiveTechnicalDetails;
+            MessageDisplay.IncludeUserName = IncludeUserName;
+            MessageDisplay.IncludeMediaTitle = IncludeMediaTitle;
+            MessageDisplay.IncludeMediaType = IncludeMediaType;
+            MessageDisplay.IncludeSeriesEpisode = IncludeSeriesEpisode;
+            MessageDisplay.IncludeClientName = IncludeClientName;
+            MessageDisplay.IncludeDeviceName = IncludeDeviceName;
+            MessageDisplay.IncludePlaybackPosition = IncludePlaybackPosition;
+            MessageDisplay.IncludePlayedToCompletion = IncludePlayedToCompletion;
+
+            // 播放通知
+            PlaybackNotification.NotifyPlaybackStarted = NotifyPlaybackStarted;
+            PlaybackNotification.NotifyPlaybackStopped = NotifyPlaybackStopped;
+            PlaybackNotification.NotifyPlaybackPaused = NotifyPlaybackPaused;
+            PlaybackNotification.NotifyPlaybackResumed = NotifyPlaybackResumed;
+            PlaybackNotification.NotifyPlaybackCompleted = NotifyPlaybackCompleted;
+            PlaybackNotification.NotifyPlaybackAbandoned = NotifyPlaybackAbandoned;
+            PlaybackNotification.NotifyPlaybackMethodChanged = NotifyPlaybackMethodChanged;
+            PlaybackNotification.NotifyPlaybackMilestones = NotifyPlaybackMilestones;
+            PlaybackNotification.PlaybackMilestones = PlaybackMilestones ?? "25,50,75";
+            PlaybackNotification.MinimumStopSeconds = MinimumStopSeconds;
+            PlaybackNotification.CompletionThresholdPercent = CompletionThresholdPercent;
+            PlaybackNotification.OnlyVideo = OnlyVideo;
+
+            // 登录与用户
+            LoginAndUser.NotifyAuthenticationSucceeded = NotifyAuthenticationSucceeded;
+            LoginAndUser.NotifyAuthenticationFailed = NotifyAuthenticationFailed;
+            LoginAndUser.NotifyUserLockedOut = NotifyUserLockedOut;
+            LoginAndUser.NotifySessionStarted = NotifySessionStarted;
+            LoginAndUser.NotifySessionEnded = NotifySessionEnded;
+            LoginAndUser.NotifyRemoteControlDisconnected = NotifyRemoteControlDisconnected;
+            LoginAndUser.NotifyPartyJoined = NotifyPartyJoined;
+            LoginAndUser.NotifyPartyLeft = NotifyPartyLeft;
+            LoginAndUser.NotifyUserPasswordChanged = NotifyUserPasswordChanged;
+            LoginAndUser.NotifyUserCreated = NotifyUserCreated;
+            LoginAndUser.NotifyUserDeleted = NotifyUserDeleted;
+            LoginAndUser.NotifyUserUpdated = NotifyUserUpdated;
+            LoginAndUser.NotifyUserPolicyUpdated = NotifyUserPolicyUpdated;
+            LoginAndUser.NotifyUserConfigurationUpdated = NotifyUserConfigurationUpdated;
+            LoginAndUser.UserFilterMode = UserFilterMode;
+            LoginAndUser.UserNames = UserNames ?? "";
+
+            // 媒体库与用户行为
+            LibraryAndUserBehavior.NotifyNewMovies = NotifyNewMovies;
+            LibraryAndUserBehavior.NotifyNewEpisodes = NotifyNewEpisodes;
+            LibraryAndUserBehavior.NotifyNewMusic = NotifyNewMusic;
+            LibraryAndUserBehavior.NotifyOtherNewItems = NotifyOtherNewItems;
+            LibraryAndUserBehavior.NotifyItemsRemoved = NotifyItemsRemoved;
+            LibraryAndUserBehavior.NotifyItemsUpdated = NotifyItemsUpdated;
+            LibraryAndUserBehavior.EnableLibraryAggregation = EnableLibraryAggregation;
+            LibraryAndUserBehavior.LibraryAggregationWindowSeconds = LibraryAggregationWindowSeconds;
+            LibraryAndUserBehavior.MaximumIndividualLibraryMessages = MaximumIndividualLibraryMessages;
+            LibraryAndUserBehavior.NotifyFavoriteAdded = NotifyFavoriteAdded;
+            LibraryAndUserBehavior.NotifyFavoriteRemoved = NotifyFavoriteRemoved;
+            LibraryAndUserBehavior.NotifyMarkedPlayed = NotifyMarkedPlayed;
+            LibraryAndUserBehavior.NotifyMarkedUnplayed = NotifyMarkedUnplayed;
+            LibraryAndUserBehavior.NotifyUserRatingChanged = NotifyUserRatingChanged;
+
+            // 任务、Live TV 与服务器
+            TaskAndLiveTvAndServer.NotifyTaskFailed = NotifyTaskFailed;
+            TaskAndLiveTvAndServer.NotifyTaskCompleted = NotifyTaskCompleted;
+            TaskAndLiveTvAndServer.NotifyTaskCancelled = NotifyTaskCancelled;
+            TaskAndLiveTvAndServer.NotifyLibraryScanStarted = NotifyLibraryScanStarted;
+            TaskAndLiveTvAndServer.NotifyLibraryScanCompleted = NotifyLibraryScanCompleted;
+            TaskAndLiveTvAndServer.NotifyMetadataRefreshCompleted = NotifyMetadataRefreshCompleted;
+            TaskAndLiveTvAndServer.NotifyBackupCompleted = NotifyBackupCompleted;
+            TaskAndLiveTvAndServer.EnableLiveTvNotifications = EnableLiveTvNotifications;
+            TaskAndLiveTvAndServer.NotifyRecordingStarted = NotifyRecordingStarted;
+            TaskAndLiveTvAndServer.NotifyRecordingEnded = NotifyRecordingEnded;
+            TaskAndLiveTvAndServer.NotifyTimerCreated = NotifyTimerCreated;
+            TaskAndLiveTvAndServer.NotifyTimerUpdated = NotifyTimerUpdated;
+            TaskAndLiveTvAndServer.NotifyTimerCancelled = NotifyTimerCancelled;
+            TaskAndLiveTvAndServer.NotifySeriesTimerCreated = NotifySeriesTimerCreated;
+            TaskAndLiveTvAndServer.NotifySeriesTimerUpdated = NotifySeriesTimerUpdated;
+            TaskAndLiveTvAndServer.NotifySeriesTimerCancelled = NotifySeriesTimerCancelled;
+            TaskAndLiveTvAndServer.NotifyServerStarted = NotifyServerStarted;
+            TaskAndLiveTvAndServer.NotifyServerStopping = NotifyServerStopping;
+            TaskAndLiveTvAndServer.NotifyUpdateAvailable = NotifyUpdateAvailable;
+            TaskAndLiveTvAndServer.NotifyApplicationUpdated = NotifyApplicationUpdated;
+            TaskAndLiveTvAndServer.NotifyRestartRequired = NotifyRestartRequired;
+            TaskAndLiveTvAndServer.NotifyMaintenanceModeEntered = NotifyMaintenanceModeEntered;
+            TaskAndLiveTvAndServer.NotifyMaintenanceModeExited = NotifyMaintenanceModeExited;
+
+            // 高级与诊断
+            AdvancedAndDiagnostics.MaximumNotificationsPerMinute = MaximumNotificationsPerMinute;
+            AdvancedAndDiagnostics.SecurityEventsBypassRateLimit = SecurityEventsBypassRateLimit;
+            AdvancedAndDiagnostics.AggregateWhenRateLimited = AggregateWhenRateLimited;
+            AdvancedAndDiagnostics.SendTestNotification = SendTestNotification;
+            AdvancedAndDiagnostics.LastTestResult = LastTestResult ?? "";
+        }
+
+        /// <summary>
+        /// 从分组对象回写旧扁平字段，支持降级到旧版本插件。
+        /// </summary>
+        public void SyncFromGroups()
+        {
+            EnsureGroups();
+
+            // 飞书连接
+            Enabled = FeishuConnection.Enabled;
+            WebhookUrl = FeishuConnection.WebhookUrl ?? "";
+            RequestTimeoutSeconds = FeishuConnection.RequestTimeoutSeconds;
+
+            // 机器人安全
+            EnableCustomKeyword = BotSecurity.EnableCustomKeyword;
+            CustomKeyword = BotSecurity.CustomKeyword ?? "";
+            EnableSignatureVerification = BotSecurity.EnableSignatureVerification;
+
+            // 消息显示
+            MessageFormat = MessageDisplay.MessageFormat;
+            MessageDetailLevel = MessageDisplay.MessageDetailLevel;
+            ShowServerName = MessageDisplay.ShowServerName;
+            ShowEventTime = MessageDisplay.ShowEventTime;
+            IpAddressDisplayMode = MessageDisplay.IpAddressDisplayMode;
+            DeviceIdDisplayMode = MessageDisplay.DeviceIdDisplayMode;
+            FallbackToTextOnCardFailure = MessageDisplay.FallbackToTextOnCardFailure;
+            ShowSensitiveTechnicalDetails = MessageDisplay.ShowSensitiveTechnicalDetails;
+            IncludeUserName = MessageDisplay.IncludeUserName;
+            IncludeMediaTitle = MessageDisplay.IncludeMediaTitle;
+            IncludeMediaType = MessageDisplay.IncludeMediaType;
+            IncludeSeriesEpisode = MessageDisplay.IncludeSeriesEpisode;
+            IncludeClientName = MessageDisplay.IncludeClientName;
+            IncludeDeviceName = MessageDisplay.IncludeDeviceName;
+            IncludePlaybackPosition = MessageDisplay.IncludePlaybackPosition;
+            IncludePlayedToCompletion = MessageDisplay.IncludePlayedToCompletion;
+
+            // 播放通知
+            NotifyPlaybackStarted = PlaybackNotification.NotifyPlaybackStarted;
+            NotifyPlaybackStopped = PlaybackNotification.NotifyPlaybackStopped;
+            NotifyPlaybackPaused = PlaybackNotification.NotifyPlaybackPaused;
+            NotifyPlaybackResumed = PlaybackNotification.NotifyPlaybackResumed;
+            NotifyPlaybackCompleted = PlaybackNotification.NotifyPlaybackCompleted;
+            NotifyPlaybackAbandoned = PlaybackNotification.NotifyPlaybackAbandoned;
+            NotifyPlaybackMethodChanged = PlaybackNotification.NotifyPlaybackMethodChanged;
+            NotifyPlaybackMilestones = PlaybackNotification.NotifyPlaybackMilestones;
+            PlaybackMilestones = PlaybackNotification.PlaybackMilestones ?? "25,50,75";
+            MinimumStopSeconds = PlaybackNotification.MinimumStopSeconds;
+            CompletionThresholdPercent = PlaybackNotification.CompletionThresholdPercent;
+            OnlyVideo = PlaybackNotification.OnlyVideo;
+
+            // 登录与用户
+            NotifyAuthenticationSucceeded = LoginAndUser.NotifyAuthenticationSucceeded;
+            NotifyAuthenticationFailed = LoginAndUser.NotifyAuthenticationFailed;
+            NotifyUserLockedOut = LoginAndUser.NotifyUserLockedOut;
+            NotifySessionStarted = LoginAndUser.NotifySessionStarted;
+            NotifySessionEnded = LoginAndUser.NotifySessionEnded;
+            NotifyRemoteControlDisconnected = LoginAndUser.NotifyRemoteControlDisconnected;
+            NotifyPartyJoined = LoginAndUser.NotifyPartyJoined;
+            NotifyPartyLeft = LoginAndUser.NotifyPartyLeft;
+            NotifyUserPasswordChanged = LoginAndUser.NotifyUserPasswordChanged;
+            NotifyUserCreated = LoginAndUser.NotifyUserCreated;
+            NotifyUserDeleted = LoginAndUser.NotifyUserDeleted;
+            NotifyUserUpdated = LoginAndUser.NotifyUserUpdated;
+            NotifyUserPolicyUpdated = LoginAndUser.NotifyUserPolicyUpdated;
+            NotifyUserConfigurationUpdated = LoginAndUser.NotifyUserConfigurationUpdated;
+            UserFilterMode = LoginAndUser.UserFilterMode;
+            UserNames = LoginAndUser.UserNames ?? "";
+
+            // 媒体库与用户行为
+            NotifyNewMovies = LibraryAndUserBehavior.NotifyNewMovies;
+            NotifyNewEpisodes = LibraryAndUserBehavior.NotifyNewEpisodes;
+            NotifyNewMusic = LibraryAndUserBehavior.NotifyNewMusic;
+            NotifyOtherNewItems = LibraryAndUserBehavior.NotifyOtherNewItems;
+            NotifyItemsRemoved = LibraryAndUserBehavior.NotifyItemsRemoved;
+            NotifyItemsUpdated = LibraryAndUserBehavior.NotifyItemsUpdated;
+            EnableLibraryAggregation = LibraryAndUserBehavior.EnableLibraryAggregation;
+            LibraryAggregationWindowSeconds = LibraryAndUserBehavior.LibraryAggregationWindowSeconds;
+            MaximumIndividualLibraryMessages = LibraryAndUserBehavior.MaximumIndividualLibraryMessages;
+            NotifyFavoriteAdded = LibraryAndUserBehavior.NotifyFavoriteAdded;
+            NotifyFavoriteRemoved = LibraryAndUserBehavior.NotifyFavoriteRemoved;
+            NotifyMarkedPlayed = LibraryAndUserBehavior.NotifyMarkedPlayed;
+            NotifyMarkedUnplayed = LibraryAndUserBehavior.NotifyMarkedUnplayed;
+            NotifyUserRatingChanged = LibraryAndUserBehavior.NotifyUserRatingChanged;
+
+            // 任务、Live TV 与服务器
+            NotifyTaskFailed = TaskAndLiveTvAndServer.NotifyTaskFailed;
+            NotifyTaskCompleted = TaskAndLiveTvAndServer.NotifyTaskCompleted;
+            NotifyTaskCancelled = TaskAndLiveTvAndServer.NotifyTaskCancelled;
+            NotifyLibraryScanStarted = TaskAndLiveTvAndServer.NotifyLibraryScanStarted;
+            NotifyLibraryScanCompleted = TaskAndLiveTvAndServer.NotifyLibraryScanCompleted;
+            NotifyMetadataRefreshCompleted = TaskAndLiveTvAndServer.NotifyMetadataRefreshCompleted;
+            NotifyBackupCompleted = TaskAndLiveTvAndServer.NotifyBackupCompleted;
+            EnableLiveTvNotifications = TaskAndLiveTvAndServer.EnableLiveTvNotifications;
+            NotifyRecordingStarted = TaskAndLiveTvAndServer.NotifyRecordingStarted;
+            NotifyRecordingEnded = TaskAndLiveTvAndServer.NotifyRecordingEnded;
+            NotifyTimerCreated = TaskAndLiveTvAndServer.NotifyTimerCreated;
+            NotifyTimerUpdated = TaskAndLiveTvAndServer.NotifyTimerUpdated;
+            NotifyTimerCancelled = TaskAndLiveTvAndServer.NotifyTimerCancelled;
+            NotifySeriesTimerCreated = TaskAndLiveTvAndServer.NotifySeriesTimerCreated;
+            NotifySeriesTimerUpdated = TaskAndLiveTvAndServer.NotifySeriesTimerUpdated;
+            NotifySeriesTimerCancelled = TaskAndLiveTvAndServer.NotifySeriesTimerCancelled;
+            NotifyServerStarted = TaskAndLiveTvAndServer.NotifyServerStarted;
+            NotifyServerStopping = TaskAndLiveTvAndServer.NotifyServerStopping;
+            NotifyUpdateAvailable = TaskAndLiveTvAndServer.NotifyUpdateAvailable;
+            NotifyApplicationUpdated = TaskAndLiveTvAndServer.NotifyApplicationUpdated;
+            NotifyRestartRequired = TaskAndLiveTvAndServer.NotifyRestartRequired;
+            NotifyMaintenanceModeEntered = TaskAndLiveTvAndServer.NotifyMaintenanceModeEntered;
+            NotifyMaintenanceModeExited = TaskAndLiveTvAndServer.NotifyMaintenanceModeExited;
+
+            // 高级与诊断
+            MaximumNotificationsPerMinute = AdvancedAndDiagnostics.MaximumNotificationsPerMinute;
+            SecurityEventsBypassRateLimit = AdvancedAndDiagnostics.SecurityEventsBypassRateLimit;
+            AggregateWhenRateLimited = AdvancedAndDiagnostics.AggregateWhenRateLimited;
+            SendTestNotification = AdvancedAndDiagnostics.SendTestNotification;
+            LastTestResult = AdvancedAndDiagnostics.LastTestResult ?? "";
+        }
+
+        /// <summary>
+        /// JSON 反序列化后立即调用。扁平字段被 JSON 赋值后，
+        /// 若 ConfigSchemaVersion 已是最新则只需确保分组对象也存在即可；
+        /// 若版本过旧则由 Apply 执行一次性迁移。
+        /// 注意：不调用 SyncToGroups()，因为保存时会把分组对象的值回写到扁平字段，
+        /// 下次加载时扁平字段已有正确的值。
+        /// 关键原则：首次反序列化后，若版本号已是最新（说明之前已保存过），
+        /// 则扁平字段和分组字段应该一致（上次保存时 SyncFromGroups 保证了这一点）。
+        /// 若仍为空分组，则从扁平字段填充（覆盖空值场景）。
+        /// </summary>
+        public new MediaBrowser.Model.GenericEdit.IEditableObject DeserializeFromJsonString(string jsonString, IJsonSerializer serializer)
+        {
+            var result = (MediaBrowser.Model.GenericEdit.IEditableObject)base.DeserializeFromJsonString(jsonString, serializer);
+            if (result is PluginOptions options)
+            {
+                options.EnsureGroups();
+                Configuration.ConfigMigrator.Apply(options);
+                // 加载后必须确保分组对象反映扁平字段的值（当分组字段为空时从扁平填充）
+                options.EnsureGroupsHaveData();
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// JSON 流反序列化后立即调用。
+        /// </summary>
+        public new MediaBrowser.Model.GenericEdit.IEditableObject DeserializeFromJsonStream(Stream jsonStream, IJsonSerializer serializer)
+        {
+            var result = (MediaBrowser.Model.GenericEdit.IEditableObject)base.DeserializeFromJsonStream(jsonStream, serializer);
+            if (result is PluginOptions options)
+            {
+                options.EnsureGroups();
+                Configuration.ConfigMigrator.Apply(options);
+                options.EnsureGroupsHaveData();
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// 当分组对象的 WebhookUrl 为空但扁平字段有值时，从扁平字段填充分组。
+        /// 这覆盖了第一次加载已迁移过的配置文件时分组对象为全新实例但扁平字段有值的场景。
+        /// </summary>
+        public void EnsureGroupsHaveData()
+        {
+            if (FeishuConnection != null && string.IsNullOrEmpty(FeishuConnection.WebhookUrl) && !string.IsNullOrEmpty(WebhookUrl))
+            {
+                SyncToGroups();
             }
         }
     }

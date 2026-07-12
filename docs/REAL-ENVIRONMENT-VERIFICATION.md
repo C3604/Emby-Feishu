@@ -20,7 +20,7 @@
 
 ### 3. 替换插件 DLL
 - 操作：把新的 `src/EmbyFeishu/bin/Release/EmbyFeishu.dll` 复制到 Emby 插件目录，覆盖旧文件。**只复制这一个文件。**
-- 预期：插件目录中 `EmbyFeishu.dll` 是新版本（1.3.0.0）。
+- 预期：插件目录中 `EmbyFeishu.dll` 是新版本（1.4.0.0）。
 - 失败时：确认没有误传 `deps.json`、`pdb` 或任何 `MediaBrowser.*.dll`。
 
 ### 4. 启动 Emby Server
@@ -29,7 +29,7 @@
 
 ### 5. 确认插件显示
 - 操作：Emby 后台 → 插件。
-- 预期：看到「Emby 飞书通知」，版本 1.3.0.0。
+- 预期：看到「Emby 飞书通知」，版本 1.4.0.0。
 - 失败时：查看 Emby 日志（路径见 DEPLOYMENT.md 第八节），搜索 `EmbyFeishu` 与 `error`。
 
 ---
