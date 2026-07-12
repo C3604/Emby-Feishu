@@ -8,19 +8,13 @@ namespace EmbyFeishu.Events
     /// </summary>
     public interface INotificationDispatcher : IDisposable
     {
-        /// <summary>
-        /// 将通知事件入队
-        /// </summary>
-        void Enqueue(PlaybackNotificationEvent evt);
+        /// <summary>将通知事件入队</summary>
+        void Enqueue(NotificationEvent evt);
 
-        /// <summary>
-        /// 启动后台处理循环
-        /// </summary>
+        /// <summary>启动后台处理循环</summary>
         void Start();
 
-        /// <summary>
-        /// 停止后台处理并释放资源
-        /// </summary>
+        /// <summary>停止后台处理并释放资源</summary>
         void Stop();
     }
 }

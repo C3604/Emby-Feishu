@@ -28,19 +28,23 @@ namespace EmbyFeishu.Feishu
             _logger = logger;
         }
 
-        public async Task<WebhookSendResult> SendTextAsync(string webhookUrl, string text, int timeoutMs, CancellationToken cancellationToken)
+        public Task<WebhookSendResult> SendTextAsync(string webhookUrl, string text, int timeoutMs, CancellationToken cancellationToken)
+        {
+            var request = new FeishuWebhookRequest
+            {
+                msg_type = "text",
+                content = new FeishuTextContent { text = text }
+            };
+            return SendAsync(webhookUrl, request, timeoutMs, cancellationToken);
+        }
+
+        public async Task<WebhookSendResult> SendAsync(string webhookUrl, object body, int timeoutMs, CancellationToken cancellationToken)
         {
             var maskedUrl = WebhookMasker.Mask(webhookUrl);
 
             try
             {
-                var request = new FeishuWebhookRequest
-                {
-                    msg_type = "text",
-                    content = new FeishuTextContent { text = text }
-                };
-
-                var jsonMemory = _jsonSerializer.SerializeToString(request);
+                var jsonMemory = _jsonSerializer.SerializeToString(body);
                 var jsonBody = jsonMemory.ToString();
 
                 var httpRequest = new HttpRequestOptions

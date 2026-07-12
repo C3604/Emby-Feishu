@@ -1,93 +1,60 @@
 using System.Text;
-using EmbyFeishu.Infrastructure;
+using EmbyFeishu.Feishu;
 using EmbyFeishu.Models;
 
 namespace EmbyFeishu.Messaging
 {
     /// <summary>
-    /// 飞书文本消息格式化器
+    /// 飞书文本消息格式化器。基于 MessageComposer 的筛选结果渲染纯文本。
     /// </summary>
     public class FeishuTextNotificationFormatter : INotificationFormatter
     {
-        public string Format(PlaybackNotificationEvent evt, PluginOptions options)
+        public object BuildBody(NotificationEvent evt, PluginOptions options)
         {
+            var text = BuildText(evt, options);
+            return new FeishuWebhookRequest
+            {
+                msg_type = "text",
+                content = new FeishuTextContent { text = text }
+            };
+        }
+
+        /// <summary>
+        /// 渲染文本正文（供测试与卡片回退复用）。
+        /// </summary>
+        public static string BuildText(NotificationEvent evt, PluginOptions options)
+        {
+            var msg = MessageComposer.Compose(evt, options);
             var sb = new StringBuilder();
 
-            sb.AppendLine(GetEventEmoji(evt.EventType) + " " + GetEventTitle(evt.EventType));
+            sb.AppendLine(msg.Header);
             sb.AppendLine();
 
-            if (options.IncludeUserName && !string.IsNullOrWhiteSpace(evt.UserName))
+            if (!string.IsNullOrWhiteSpace(msg.Summary))
             {
-                sb.AppendLine("用户：" + evt.UserName);
+                sb.AppendLine(msg.Summary);
             }
 
-            if (options.IncludeMediaTitle)
+            foreach (var field in msg.VisibleFields)
             {
-                var title = MediaTitleFormatter.Format(
-                    evt.ItemName, evt.SeriesName,
-                    options.IncludeSeriesEpisode ? evt.SeasonNumber : null,
-                    options.IncludeSeriesEpisode ? evt.EpisodeNumber : null,
-                    options.IncludeSeriesEpisode ? evt.EpisodeName : null);
-                sb.AppendLine("媒体：" + title);
-            }
-
-            if (options.IncludeMediaType && !string.IsNullOrWhiteSpace(evt.MediaType))
-            {
-                sb.AppendLine("类型：" + evt.MediaType);
-            }
-
-            if (options.IncludePlaybackPosition && evt.EventType == PlaybackEventType.Stopped)
-            {
-                var pos = TimeFormatter.FormatTicks(evt.PlaybackPositionTicks);
-                var total = TimeFormatter.FormatTicks(evt.RuntimeTicks);
-                if (pos != null || total != null)
+                // 空字段在 AddField/Compose 阶段已被过滤，这里再兜底一次
+                if (!string.IsNullOrWhiteSpace(field.Value))
                 {
-                    sb.AppendLine("播放位置：" + (pos ?? "00:00") + " / " + (total ?? "未知"));
+                    sb.AppendLine(field.Label + "：" + field.Value);
                 }
             }
 
-            if (options.IncludePlayedToCompletion && evt.EventType == PlaybackEventType.Stopped && evt.PlayedToCompletion.HasValue)
+            if (!string.IsNullOrWhiteSpace(msg.ServerText))
             {
-                sb.AppendLine("播放完成：" + (evt.PlayedToCompletion.Value ? "是" : "否"));
+                sb.AppendLine("服务器：" + msg.ServerText);
             }
 
-            if (options.IncludeClientName && !string.IsNullOrWhiteSpace(evt.ClientName))
+            if (!string.IsNullOrWhiteSpace(msg.TimeText))
             {
-                sb.AppendLine("客户端：" + evt.ClientName);
+                sb.AppendLine("时间：" + msg.TimeText);
             }
-
-            if (options.IncludeDeviceName && !string.IsNullOrWhiteSpace(evt.DeviceName))
-            {
-                sb.AppendLine("设备：" + evt.DeviceName);
-            }
-
-            sb.AppendLine("时间：" + TimeFormatter.FormatDateTime(evt.OccurredAt));
 
             return sb.ToString().TrimEnd();
-        }
-
-        private static string GetEventEmoji(PlaybackEventType type)
-        {
-            switch (type)
-            {
-                case PlaybackEventType.Started: return "▶️";
-                case PlaybackEventType.Stopped: return "⏹️";
-                case PlaybackEventType.Paused: return "⏸️";
-                case PlaybackEventType.Resumed: return "▶️";
-                default: return "📢";
-            }
-        }
-
-        private static string GetEventTitle(PlaybackEventType type)
-        {
-            switch (type)
-            {
-                case PlaybackEventType.Started: return "开始播放";
-                case PlaybackEventType.Stopped: return "停止播放";
-                case PlaybackEventType.Paused: return "暂停播放";
-                case PlaybackEventType.Resumed: return "恢复播放";
-                default: return "播放事件";
-            }
         }
     }
 }

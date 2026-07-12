@@ -1,309 +1,268 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
-using System.Threading.Tasks;
 using EmbyFeishu.Events;
 using EmbyFeishu.Feishu;
 using EmbyFeishu.Infrastructure;
 using EmbyFeishu.Messaging;
 using EmbyFeishu.Models;
 using MediaBrowser.Common.Net;
+using MediaBrowser.Controller;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Controller.LiveTv;
 using MediaBrowser.Controller.Plugins;
 using MediaBrowser.Controller.Session;
-using MediaBrowser.Model.Dto;
 using MediaBrowser.Model.Logging;
 using MediaBrowser.Model.Serialization;
+using MediaBrowser.Model.Tasks;
 
 namespace EmbyFeishu
 {
     /// <summary>
-    /// 插件入口点，负责事件订阅和生命周期管理
+    /// 插件入口点，负责组装各事件源、后台队列与生命周期管理。
+    /// 事件回调只提取数据并入队，绝不在回调线程做网络请求。
     /// </summary>
     public class EntryPoint : IServerEntryPoint
     {
         private readonly ISessionManager _sessionManager;
+        private readonly IUserManager _userManager;
+        private readonly ILibraryManager _libraryManager;
+        private readonly IUserDataManager _userDataManager;
+        private readonly ITaskManager _taskManager;
+        private readonly IServerApplicationHost _appHost;
         private readonly ILogger _logger;
         private readonly IHttpClient _httpClient;
         private readonly IJsonSerializer _jsonSerializer;
+
         private readonly PlaybackStateTracker _stateTracker;
+        private readonly NotificationPolicy _policy;
         private readonly NotificationDispatcher _dispatcher;
-        private readonly FeishuTextNotificationFormatter _formatter;
+        private readonly LibraryAggregator _aggregator;
+        private readonly FeishuWebhookClient _webhookClient;
+        private readonly NotificationContext _context;
+        private readonly List<IEventSource> _sources = new List<IEventSource>();
+        private UserDataEventSource _userDataSource;
+
         private Timer _cleanupTimer;
 
         public EntryPoint(
             ISessionManager sessionManager,
+            IUserManager userManager,
+            ILibraryManager libraryManager,
+            IUserDataManager userDataManager,
+            ITaskManager taskManager,
+            IServerApplicationHost appHost,
             ILogManager logManager,
             IHttpClient httpClient,
             IJsonSerializer jsonSerializer)
         {
             _sessionManager = sessionManager;
+            _userManager = userManager;
+            _libraryManager = libraryManager;
+            _userDataManager = userDataManager;
+            _taskManager = taskManager;
+            _appHost = appHost;
             _logger = logManager.GetLogger("EmbyFeishu");
             _httpClient = httpClient;
             _jsonSerializer = jsonSerializer;
-            _stateTracker = new PlaybackStateTracker();
-            _formatter = new FeishuTextNotificationFormatter();
 
-            var webhookClient = new FeishuWebhookClient(_httpClient, _jsonSerializer, _logger);
-            _dispatcher = new NotificationDispatcher(webhookClient, _formatter, _logger);
+            _stateTracker = new PlaybackStateTracker();
+            _policy = new NotificationPolicy();
+            _webhookClient = new FeishuWebhookClient(_httpClient, _jsonSerializer, _logger);
+            _dispatcher = new NotificationDispatcher(
+                _webhookClient,
+                new FeishuTextNotificationFormatter(),
+                new FeishuCardNotificationFormatter(),
+                _logger);
+
+            _context = new NotificationContext(
+                _logger,
+                new SensitiveDataSanitizer(),
+                _policy,
+                _dispatcher,
+                () => Plugin.Instance?.GetPluginOptions(),
+                GetServerName);
+
+            _aggregator = new LibraryAggregator(
+                evt => _context.Publish(evt),
+                () => Plugin.Instance?.GetPluginOptions(),
+                GetServerName,
+                _logger);
         }
 
-        /// <summary>
-        /// 插件启动时由 Emby 调用
-        /// </summary>
         public void Run()
         {
             _logger.Info("[EmbyFeishu] 插件入口点启动");
 
-            _sessionManager.PlaybackStart += OnPlaybackStart;
-            _sessionManager.PlaybackProgress += OnPlaybackProgress;
-            _sessionManager.PlaybackStopped += OnPlaybackStopped;
-
-            _logger.Info("[EmbyFeishu] 事件订阅完成");
-
-            _dispatcher.Start();
-
-            _cleanupTimer = new Timer(_ =>
+            // 后台队列必须先启动（关键路径，失败记 Error）
+            try
             {
-                try { _stateTracker.CleanupStale(); }
-                catch (Exception ex) { _logger.Debug("[EmbyFeishu] 清理过期会话异常: {0}", ex.Message); }
-            }, null, TimeSpan.FromHours(1), TimeSpan.FromHours(1));
-
-            var plugin = Plugin.Instance;
-            if (plugin != null)
+                _dispatcher.Start();
+            }
+            catch (Exception ex)
             {
-                var options = plugin.GetPluginOptions();
-                _logger.Info("[EmbyFeishu] 插件状态: 启用={0}", options?.Enabled ?? false);
+                _logger.Error("[EmbyFeishu] 通知调度器启动失败: {0}", ex.Message);
+                return;
+            }
+
+            // 组装事件源
+            _sources.Add(new PlaybackEventSource(_sessionManager, _context, _stateTracker));
+            _sources.Add(new SessionEventSource(_sessionManager, _context));
+            _sources.Add(new UserEventSource(_userManager, _context));
+            _sources.Add(new LibraryEventSource(_libraryManager, _context, _aggregator));
+            _userDataSource = new UserDataEventSource(_userDataManager, _context);
+            _sources.Add(_userDataSource);
+            _sources.Add(new TaskEventSource(_taskManager, _context));
+            _sources.Add(new ServerEventSource(_appHost, _context));
+
+            // Live TV 可选：无法注入时跳过，不影响其他功能
+            TryAddLiveTv();
+
+            // 逐个启动，单个可选源失败不影响其他
+            foreach (var src in _sources)
+            {
+                try
+                {
+                    src.Start();
+                    _logger.Info("[EmbyFeishu] 事件源已启动: {0}", src.Name);
+                }
+                catch (Exception ex)
+                {
+                    _logger.Error("[EmbyFeishu] 事件源 {0} 启动失败: {1}", src.Name, ex.Message);
+                }
+            }
+
+            // 定时清理
+            _cleanupTimer = new Timer(_ => SafeCleanup(), null, TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(5));
+
+            // 服务器启动通知（在初始化、订阅、队列就绪之后发送）
+            PublishServerStarted();
+
+            var options = Plugin.Instance?.GetPluginOptions();
+            _logger.Info("[EmbyFeishu] 插件状态: 启用={0}", options?.Enabled ?? false);
+        }
+
+        private void TryAddLiveTv()
+        {
+            try
+            {
+                var liveTv = _appHost.Resolve<ILiveTvManager>();
+                if (liveTv != null)
+                {
+                    _sources.Add(new LiveTvEventSource(liveTv, _context));
+                    _logger.Info("[EmbyFeishu] 已加载 Live TV 事件源");
+                }
+                else
+                {
+                    _logger.Info("[EmbyFeishu] 未检测到 Live TV，跳过该事件源");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.Info("[EmbyFeishu] Live TV 不可用，跳过该事件源: {0}", ex.Message);
             }
         }
 
-        /// <summary>
-        /// 插件卸载时由 Emby 调用
-        /// </summary>
+        private void PublishServerStarted()
+        {
+            try
+            {
+                var options = _context.GetEnabledOptions();
+                if (options == null || !options.NotifyServerStarted) return;
+
+                var evt = new NotificationEvent
+                {
+                    EventType = NotificationEventType.ServerStarted,
+                    Category = NotificationCategory.Server,
+                    Severity = NotificationSeverity.Success,
+                    Emoji = "🚀",
+                    Title = "Emby Server 已启动",
+                    ServerName = GetServerName()
+                };
+                try { evt.AddField("版本", _appHost.ApplicationVersion?.ToString(), MessageDetailLevel.Simple); } catch { }
+                try { evt.AddField("系统", _appHost.OperatingSystemDisplayName, MessageDetailLevel.Detailed); } catch { }
+                _context.Publish(evt);
+            }
+            catch (Exception ex) { _logger.Error("[EmbyFeishu] 发送服务器启动通知异常: {0}", ex.Message); }
+        }
+
+        private void SafeCleanup()
+        {
+            try { _stateTracker.CleanupStale(); } catch (Exception ex) { _logger.Debug("[EmbyFeishu] 清理会话异常: {0}", ex.Message); }
+            try { _userDataSource?.CleanupStale(); } catch (Exception ex) { _logger.Debug("[EmbyFeishu] 清理用户数据缓存异常: {0}", ex.Message); }
+            try { _policy.CleanupStale(); } catch (Exception ex) { _logger.Debug("[EmbyFeishu] 清理策略缓存异常: {0}", ex.Message); }
+
+            // 汇总被限流抑制的通知数量
+            try
+            {
+                var suppressed = _policy.DrainSuppressedCount();
+                if (suppressed > 0)
+                {
+                    var options = _context.GetEnabledOptions();
+                    if (options != null && options.AggregateWhenRateLimited)
+                    {
+                        var evt = new NotificationEvent
+                        {
+                            EventType = NotificationEventType.ServerStarted, // 复用服务器分类的通用形态
+                            Category = NotificationCategory.Server,
+                            Severity = NotificationSeverity.Warning,
+                            Emoji = "⏳",
+                            Title = "通知已限流",
+                            Summary = string.Format("过去一段时间有 {0} 条通知因超过频率上限被抑制", suppressed),
+                            ServerName = GetServerName()
+                        };
+                        _dispatcher.Enqueue(evt);
+                    }
+                }
+            }
+            catch (Exception ex) { _logger.Debug("[EmbyFeishu] 限流汇总异常: {0}", ex.Message); }
+        }
+
+        private string GetServerName()
+        {
+            try { return _appHost.FriendlyName; }
+            catch { return "Emby Server"; }
+        }
+
         public void Dispose()
         {
             _logger.Info("[EmbyFeishu] 正在释放插件资源...");
 
-            _sessionManager.PlaybackStart -= OnPlaybackStart;
-            _sessionManager.PlaybackProgress -= OnPlaybackProgress;
-            _sessionManager.PlaybackStopped -= OnPlaybackStopped;
+            // 尽力而为的服务器停止通知（不长时间阻塞；强杀/断电无法保证）
+            TryPublishServerStopping();
+
+            foreach (var src in _sources)
+            {
+                try { src.Stop(); src.Dispose(); }
+                catch (Exception ex) { _logger.Debug("[EmbyFeishu] 停止事件源 {0} 异常: {1}", src.Name, ex.Message); }
+            }
+            _sources.Clear();
 
             _cleanupTimer?.Dispose();
+            _aggregator?.Dispose();
             _dispatcher?.Dispose();
 
             _logger.Info("[EmbyFeishu] 插件资源已释放");
         }
 
-        private void OnPlaybackStart(object sender, PlaybackProgressEventArgs e)
+        private void TryPublishServerStopping()
         {
             try
             {
-                var options = GetOptionsIfEnabled();
-                if (options == null) return;
+                var options = _context.GetEnabledOptions();
+                if (options == null || !options.NotifyServerStopping) return;
 
-                if (e == null) return;
+                var text = string.Format("🛑 Emby Server 正在停止\n\n服务器：{0}\n时间：{1}",
+                    GetServerName(), TimeFormatter.FormatDateTime(DateTime.Now));
 
-                if (options.OnlyVideo && !IsVideoItem(e))
-                    return;
-
-                var userName = GetUserName(e);
-                if (!UserFilter.ShouldNotify(userName, options.UserFilterMode, options.UserNames))
-                    return;
-
-                var evt = BuildEvent(e, PlaybackEventType.Started);
-                var key = BuildSessionKey(e);
-                _stateTracker.OnPlaybackStarted(key);
-
-                if (!options.NotifyPlaybackStarted)
-                    return;
-
-                _dispatcher.Enqueue(evt);
+                // 直接短超时发送，最多等待 2 秒，避免拖慢关闭
+                var task = _webhookClient.SendTextAsync(options.WebhookUrl, text, 2000, CancellationToken.None);
+                task.Wait(TimeSpan.FromSeconds(2));
             }
             catch (Exception ex)
             {
-                _logger.Error("[EmbyFeishu] 处理播放开始事件异常: {0}", ex.Message);
+                _logger.Debug("[EmbyFeishu] 发送服务器停止通知失败（可忽略）: {0}", ex.Message);
             }
-        }
-
-        private void OnPlaybackProgress(object sender, PlaybackProgressEventArgs e)
-        {
-            try
-            {
-                var options = GetOptionsIfEnabled();
-                if (options == null) return;
-
-                if (!options.NotifyPlaybackPaused && !options.NotifyPlaybackResumed)
-                    return;
-
-                if (e == null) return;
-
-                if (options.OnlyVideo && !IsVideoItem(e))
-                    return;
-
-                var userName = GetUserName(e);
-                if (!UserFilter.ShouldNotify(userName, options.UserFilterMode, options.UserNames))
-                    return;
-
-                var isPaused = e.IsPaused;
-                var key = BuildSessionKey(e);
-                var stateChange = _stateTracker.OnPlaybackProgress(key, isPaused);
-
-                if (stateChange == null)
-                    return;
-
-                if (stateChange == PlaybackEventType.Paused && !options.NotifyPlaybackPaused)
-                    return;
-                if (stateChange == PlaybackEventType.Resumed && !options.NotifyPlaybackResumed)
-                    return;
-
-                var evt = BuildEvent(e, stateChange.Value);
-                _dispatcher.Enqueue(evt);
-            }
-            catch (Exception ex)
-            {
-                _logger.Error("[EmbyFeishu] 处理播放进度事件异常: {0}", ex.Message);
-            }
-        }
-
-        private void OnPlaybackStopped(object sender, PlaybackStopEventArgs e)
-        {
-            try
-            {
-                var options = GetOptionsIfEnabled();
-                if (options == null) return;
-
-                if (e == null) return;
-
-                if (options.OnlyVideo && !IsVideoItem(e))
-                    return;
-
-                var userName = GetUserName(e);
-                if (!UserFilter.ShouldNotify(userName, options.UserFilterMode, options.UserNames))
-                    return;
-
-                var key = BuildSessionKey(e);
-                _stateTracker.OnPlaybackStopped(key);
-
-                if (!options.NotifyPlaybackStopped)
-                    return;
-
-                if (options.MinimumStopSeconds > 0)
-                {
-                    var positionTicks = e.PlaybackPositionTicks;
-                    if (positionTicks.HasValue && positionTicks.Value > 0)
-                    {
-                        var positionSeconds = TimeSpan.FromTicks(positionTicks.Value).TotalSeconds;
-                        if (positionSeconds < options.MinimumStopSeconds)
-                        {
-                            _logger.Debug("[EmbyFeishu] 播放不足 {0} 秒，跳过停止通知", options.MinimumStopSeconds);
-                            return;
-                        }
-                    }
-                }
-
-                var evt = BuildEvent(e, PlaybackEventType.Stopped);
-                if (e.PlayedToCompletion)
-                {
-                    evt.PlayedToCompletion = true;
-                }
-                else
-                {
-                    evt.PlayedToCompletion = false;
-                }
-
-                _dispatcher.Enqueue(evt);
-            }
-            catch (Exception ex)
-            {
-                _logger.Error("[EmbyFeishu] 处理播放停止事件异常: {0}", ex.Message);
-            }
-        }
-
-        private PluginOptions GetOptionsIfEnabled()
-        {
-            var plugin = Plugin.Instance;
-            if (plugin == null) return null;
-
-            var options = plugin.GetPluginOptions();
-            if (options == null || !options.Enabled) return null;
-
-            if (string.IsNullOrWhiteSpace(options.WebhookUrl)) return null;
-
-            return options;
-        }
-
-        private PlaybackNotificationEvent BuildEvent(PlaybackProgressEventArgs e, PlaybackEventType eventType)
-        {
-            var item = e.MediaInfo;
-            var session = e.Session;
-
-            var evt = new PlaybackNotificationEvent
-            {
-                EventType = eventType,
-                OccurredAt = DateTime.Now,
-                PlaySessionId = e.PlaySessionId,
-                SessionId = session?.Id,
-                UserName = GetUserName(e),
-                ClientName = e.ClientName ?? session?.Client,
-                DeviceName = e.DeviceName ?? session?.DeviceName,
-                PlaybackPositionTicks = e.PlaybackPositionTicks
-            };
-
-            if (item != null)
-            {
-                evt.ItemId = item.Id;
-                evt.ItemName = item.Name;
-                evt.ItemType = item.Type;
-                evt.MediaType = item.MediaType;
-                evt.RuntimeTicks = item.RunTimeTicks;
-                FillSeriesInfo(evt, item);
-            }
-
-            return evt;
-        }
-
-        private void FillSeriesInfo(PlaybackNotificationEvent evt, BaseItemDto item)
-        {
-            if (item == null) return;
-
-            evt.SeriesName = item.SeriesName;
-            evt.SeasonNumber = item.ParentIndexNumber;
-            evt.EpisodeNumber = item.IndexNumber;
-
-            if (string.IsNullOrWhiteSpace(evt.EpisodeName) && !string.IsNullOrWhiteSpace(item.SeriesName))
-            {
-                evt.EpisodeName = item.Name;
-            }
-        }
-
-        private string GetUserName(PlaybackProgressEventArgs e)
-        {
-            var session = e.Session;
-            if (session != null)
-            {
-                var userName = session.UserName;
-                if (!string.IsNullOrWhiteSpace(userName))
-                    return userName;
-            }
-
-            return null;
-        }
-
-        /// <summary>
-        /// 统一构建会话状态键，保证开始、进度、停止三个事件使用完全一致的键。
-        /// 优先使用 PlaySessionId；缺失时组合 SessionId、ItemId 和设备名。
-        /// </summary>
-        private static string BuildSessionKey(PlaybackProgressEventArgs e)
-        {
-            var deviceName = e.DeviceName ?? e.Session?.DeviceName;
-            return PlaybackStateTracker.GetSessionKey(e.PlaySessionId, e.Session?.Id, e.MediaInfo?.Id, deviceName);
-        }
-
-        private bool IsVideoItem(PlaybackProgressEventArgs e)
-        {
-            var mediaType = e.MediaInfo?.MediaType;
-            if (string.IsNullOrWhiteSpace(mediaType))
-                return false;
-            return string.Equals(mediaType, "Video", StringComparison.OrdinalIgnoreCase);
         }
     }
 }

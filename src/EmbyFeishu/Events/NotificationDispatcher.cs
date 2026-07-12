@@ -10,16 +10,18 @@ using MediaBrowser.Model.Logging;
 namespace EmbyFeishu.Events
 {
     /// <summary>
-    /// 后台通知调度器，线程安全，可停止
+    /// 后台通知调度器，线程安全，可停止。承载统一事件模型 NotificationEvent。
+    /// 支持按配置选择文本或卡片格式，卡片失败时按配置回退文本一次。
     /// </summary>
     public class NotificationDispatcher : INotificationDispatcher
     {
         private const int MaxQueueSize = 200;
-        private readonly ConcurrentQueue<PlaybackNotificationEvent> _queue = new ConcurrentQueue<PlaybackNotificationEvent>();
+        private readonly ConcurrentQueue<NotificationEvent> _queue = new ConcurrentQueue<NotificationEvent>();
         private readonly SemaphoreSlim _signal = new SemaphoreSlim(0);
         private readonly CancellationTokenSource _cts = new CancellationTokenSource();
         private readonly IFeishuWebhookClient _webhookClient;
-        private readonly INotificationFormatter _formatter;
+        private readonly INotificationFormatter _textFormatter;
+        private readonly INotificationFormatter _cardFormatter;
         private readonly ILogger _logger;
         private Task _processingTask;
         private volatile int _queueCount;
@@ -27,17 +29,19 @@ namespace EmbyFeishu.Events
 
         public NotificationDispatcher(
             IFeishuWebhookClient webhookClient,
-            INotificationFormatter formatter,
+            INotificationFormatter textFormatter,
+            INotificationFormatter cardFormatter,
             ILogger logger)
         {
             _webhookClient = webhookClient;
-            _formatter = formatter;
+            _textFormatter = textFormatter;
+            _cardFormatter = cardFormatter;
             _logger = logger;
         }
 
-        public void Enqueue(PlaybackNotificationEvent evt)
+        public void Enqueue(NotificationEvent evt)
         {
-            if (_disposed) return;
+            if (_disposed || evt == null) return;
 
             if (_queueCount >= MaxQueueSize)
             {
@@ -49,7 +53,7 @@ namespace EmbyFeishu.Events
             _queue.Enqueue(evt);
             Interlocked.Increment(ref _queueCount);
             _signal.Release();
-            _logger.Debug("[EmbyFeishu] 通知已入队: {0} - {1}", evt.EventType, evt.ItemName ?? "未知");
+            _logger.Debug("[EmbyFeishu] 通知已入队: {0} - {1}", evt.EventType, evt.ItemName ?? evt.UserName ?? "");
         }
 
         public void Start()
@@ -65,10 +69,7 @@ namespace EmbyFeishu.Events
 
             if (_processingTask != null)
             {
-                try
-                {
-                    _processingTask.Wait(TimeSpan.FromSeconds(5));
-                }
+                try { _processingTask.Wait(TimeSpan.FromSeconds(5)); }
                 catch (AggregateException) { }
             }
 
@@ -94,22 +95,14 @@ namespace EmbyFeishu.Events
                 {
                     await _signal.WaitAsync(token).ConfigureAwait(false);
                 }
-                catch (OperationCanceledException)
-                {
-                    break;
-                }
-                catch (ObjectDisposedException)
-                {
-                    // 关闭竞态：信号量已释放，安全退出
-                    break;
-                }
+                catch (OperationCanceledException) { break; }
+                catch (ObjectDisposedException) { break; }
 
                 if (token.IsCancellationRequested || _disposed) break;
 
                 while (_queue.TryDequeue(out var evt))
                 {
                     Interlocked.Decrement(ref _queueCount);
-
                     if (token.IsCancellationRequested || _disposed) break;
 
                     try
@@ -124,46 +117,67 @@ namespace EmbyFeishu.Events
             }
         }
 
-        private async Task SendNotificationAsync(PlaybackNotificationEvent evt, CancellationToken token)
+        private async Task SendNotificationAsync(NotificationEvent evt, CancellationToken token)
         {
             var options = Plugin.Instance?.GetPluginOptions();
             if (options == null || !options.Enabled) return;
+            if (string.IsNullOrWhiteSpace(options.WebhookUrl)) return;
 
-            var text = _formatter.Format(evt, options);
             var timeoutMs = options.RequestTimeoutSeconds * 1000;
+            var useCard = options.MessageFormat == MessageFormat.FeishuCard;
 
-            var result = await _webhookClient.SendTextAsync(options.WebhookUrl, text, timeoutMs, token).ConfigureAwait(false);
+            // 主格式发送（含一次瞬时错误重试）
+            var primaryFormatter = useCard ? _cardFormatter : _textFormatter;
+            var result = await SendWithRetryAsync(evt, primaryFormatter, options.WebhookUrl, timeoutMs, token).ConfigureAwait(false);
 
             if (result.Success)
             {
-                _logger.Info("[EmbyFeishu] 通知发送成功: {0} - {1}", evt.EventType, evt.UserName ?? "未知");
+                _logger.Info("[EmbyFeishu] 通知发送成功: {0} - {1}", evt.EventType, evt.UserName ?? evt.ItemName ?? "");
+                return;
+            }
+
+            // 卡片失败且允许回退：改用文本发送一次（保证同一业务事件最多成功一次）
+            if (useCard && options.FallbackToTextOnCardFailure && !token.IsCancellationRequested)
+            {
+                _logger.Warn("[EmbyFeishu] 卡片发送失败，回退为文本: {0}", result.ErrorMessage ?? "未知错误");
+                var textResult = await SendWithRetryAsync(evt, _textFormatter, options.WebhookUrl, timeoutMs, token).ConfigureAwait(false);
+                if (textResult.Success)
+                {
+                    _logger.Info("[EmbyFeishu] 文本回退发送成功: {0}", evt.EventType);
+                    return;
+                }
+                _logger.Warn("[EmbyFeishu] 文本回退仍失败: {0}", textResult.ErrorMessage ?? "未知错误");
                 return;
             }
 
             _logger.Warn("[EmbyFeishu] 通知发送失败: {0}", result.ErrorMessage ?? "未知错误");
+        }
 
-            if (result.ShouldRetry && !token.IsCancellationRequested)
+        /// <summary>
+        /// 用指定格式化器发送，瞬时错误最多重试一次。
+        /// </summary>
+        private async Task<WebhookSendResult> SendWithRetryAsync(
+            NotificationEvent evt, INotificationFormatter formatter, string url, int timeoutMs, CancellationToken token)
+        {
+            object body;
+            try
             {
-                _logger.Info("[EmbyFeishu] 等待 1 秒后重试...");
-                try
-                {
-                    await Task.Delay(1000, token).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                {
-                    return;
-                }
-
-                var retryResult = await _webhookClient.SendTextAsync(options.WebhookUrl, text, timeoutMs, token).ConfigureAwait(false);
-                if (retryResult.Success)
-                {
-                    _logger.Info("[EmbyFeishu] 重试成功: {0}", evt.EventType);
-                }
-                else
-                {
-                    _logger.Warn("[EmbyFeishu] 重试仍然失败: {0}", retryResult.ErrorMessage ?? "未知错误");
-                }
+                body = formatter.BuildBody(evt, Plugin.Instance.GetPluginOptions());
             }
+            catch (Exception ex)
+            {
+                _logger.Error("[EmbyFeishu] 构造消息体失败: {0}", ex.Message);
+                return WebhookSendResult.Fail("构造消息体失败", false);
+            }
+
+            var result = await _webhookClient.SendAsync(url, body, timeoutMs, token).ConfigureAwait(false);
+            if (result.Success || !result.ShouldRetry || token.IsCancellationRequested)
+                return result;
+
+            try { await Task.Delay(1000, token).ConfigureAwait(false); }
+            catch (OperationCanceledException) { return result; }
+
+            return await _webhookClient.SendAsync(url, body, timeoutMs, token).ConfigureAwait(false);
         }
     }
 }

@@ -66,7 +66,45 @@ namespace EmbyFeishu.Configuration
                 errors.Add("最短播放秒数必须在 0～600 之间。");
             }
 
+            if (options.CompletionThresholdPercent < 50 || options.CompletionThresholdPercent > 100)
+            {
+                errors.Add("播放完成阈值必须在 50～100 之间。");
+            }
+
+            if (options.LibraryAggregationWindowSeconds < 10 || options.LibraryAggregationWindowSeconds > 600)
+            {
+                errors.Add("媒体库聚合窗口必须在 10～600 秒之间。");
+            }
+
+            if (options.MaximumNotificationsPerMinute < 1 || options.MaximumNotificationsPerMinute > 240)
+            {
+                errors.Add("每分钟最大通知数必须在 1～240 之间。");
+            }
+
             return errors;
+        }
+
+        /// <summary>
+        /// 解析播放进度里程碑百分比列表，返回升序去重、落在 1～99 的整数。
+        /// </summary>
+        public static List<int> ParseMilestones(string raw)
+        {
+            var result = new List<int>();
+            if (string.IsNullOrWhiteSpace(raw))
+                return result;
+
+            var parts = raw.Split(new[] { ',', ';', ' ', '\n', '\r', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+            foreach (var p in parts)
+            {
+                if (int.TryParse(p.Trim(), out var v) && v >= 1 && v <= 99)
+                {
+                    if (!result.Contains(v))
+                        result.Add(v);
+                }
+            }
+
+            result.Sort();
+            return result;
         }
 
         /// <summary>

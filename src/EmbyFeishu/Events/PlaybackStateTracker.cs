@@ -67,6 +67,86 @@ namespace EmbyFeishu.Events
         }
 
         /// <summary>
+        /// 检查是否跨越了新的进度里程碑。快进跨越多个阈值时只返回当前最高阈值一次。
+        /// 无新里程碑返回 null。
+        /// </summary>
+        public int? CheckMilestone(string key, int percent, System.Collections.Generic.IEnumerable<int> milestones)
+        {
+            if (milestones == null)
+                return null;
+
+            var state = _states.GetOrAdd(key, _ => new Models.PlaybackSessionState
+            {
+                IsPaused = false,
+                CreatedAt = DateTime.UtcNow,
+                LastUpdatedAt = DateTime.UtcNow
+            });
+
+            int? highest = null;
+            lock (state.MilestonesSent)
+            {
+                foreach (var m in milestones)
+                {
+                    if (percent >= m && !state.MilestonesSent.Contains(m))
+                    {
+                        state.MilestonesSent.Add(m);
+                        if (highest == null || m > highest.Value)
+                            highest = m;
+                    }
+                }
+            }
+
+            if (highest != null)
+                state.LastUpdatedAt = DateTime.UtcNow;
+
+            return highest;
+        }
+
+        /// <summary>
+        /// 检查播放方式是否发生变化。首次观测建立基线返回 false（不通知），
+        /// 之后仅在方式真正改变时返回 true。
+        /// </summary>
+        public bool CheckPlayMethodChanged(string key, string playMethod)
+        {
+            if (string.IsNullOrWhiteSpace(playMethod))
+                return false;
+
+            var state = _states.GetOrAdd(key, _ => new Models.PlaybackSessionState
+            {
+                IsPaused = false,
+                CreatedAt = DateTime.UtcNow,
+                LastUpdatedAt = DateTime.UtcNow
+            });
+
+            if (state.LastPlayMethod == null)
+            {
+                state.LastPlayMethod = playMethod;
+                return false;
+            }
+
+            if (!string.Equals(state.LastPlayMethod, playMethod, StringComparison.OrdinalIgnoreCase))
+            {
+                state.LastPlayMethod = playMethod;
+                state.LastUpdatedAt = DateTime.UtcNow;
+                return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>标记本次播放已发送“播放完成”，返回之前是否已标记</summary>
+        public bool MarkCompleted(string key)
+        {
+            if (_states.TryGetValue(key, out var state))
+            {
+                var prev = state.CompletedNotified;
+                state.CompletedNotified = true;
+                return prev;
+            }
+            return false;
+        }
+
+        /// <summary>
         /// 移除播放会话
         /// </summary>
         public void OnPlaybackStopped(string key)

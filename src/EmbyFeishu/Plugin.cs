@@ -48,9 +48,13 @@ namespace EmbyFeishu
 
         public ImageFormat ThumbImageFormat => ImageFormat.Png;
 
+        /// <summary>
+        /// 返回嵌入在程序集中的插件图标，供 Emby 后台显示。
+        /// </summary>
         public Stream GetThumbImage()
         {
-            return null;
+            var assembly = GetType().Assembly;
+            return assembly.GetManifestResourceStream("EmbyFeishu.thumb.png");
         }
 
         /// <summary>
