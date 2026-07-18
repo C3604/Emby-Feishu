@@ -34,6 +34,39 @@ dotnet build src/EmbyFeishu/EmbyFeishu.csproj -c Release
 dotnet build EmbyFeishu.sln -c Release
 ```
 
+## 一键 Release
+
+仓库根目录提供了 `release.cmd` 和 `scripts/release.ps1`，用于一键执行完整发布流程：
+
+- 读取 `Directory.Build.props` 中的当前版本号
+- 校验 `lib/emby/4.9.5.0/` 下的 4 个 Emby 引用 DLL
+- 执行 `dotnet restore`
+- 执行 `dotnet build EmbyFeishu.sln -c Release`
+- 执行 SelfTest
+- 生成 `release/EmbyFeishu-v版本/`
+- 输出 `EmbyFeishu.dll`、`SHA256SUMS.txt`、`RELEASE-NOTES.md`
+- 额外生成 `release/EmbyFeishu-v版本.zip`
+
+### Windows 命令行
+
+```powershell
+.\release.cmd
+```
+
+### PowerShell
+
+```powershell
+.\scripts\release.ps1
+```
+
+### 常用参数
+
+```powershell
+.\scripts\release.ps1 -Force
+.\scripts\release.ps1 -SkipSelfTest
+.\scripts\release.ps1 -EmbyReferencePath D:\Emby\system
+```
+
 ## 输出文件
 
 编译完成后，插件 DLL 位于：
