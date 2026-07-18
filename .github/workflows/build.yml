@@ -1,0 +1,48 @@
+name: Build & Test
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Download Emby DLLs
+        run: |
+          echo "::warning::Emby reference DLLs are proprietary and not included in the repository."
+          echo "CI requires lib/emby/4.9.5.0/ containing MediaBrowser.Common.dll, MediaBrowser.Controller.dll, MediaBrowser.Model.dll, Emby.Web.GenericEdit.dll."
+          echo "Place them via a secure download step or repository secret artifact."
+          if [ ! -f "lib/emby/4.9.5.0/MediaBrowser.Common.dll" ]; then
+            echo "::error::Emby DLLs not found. Skipping build."
+            exit 1
+          fi
+
+      - name: Restore dependencies
+        run: dotnet restore
+
+      - name: Build (Release)
+        run: dotnet build -c Release --no-restore
+
+      - name: Run SelfTest
+        run: dotnet run --project tools/EmbyFeishu.SelfTest/EmbyFeishu.SelfTest.csproj -c Release --no-build
+
+      - name: Verify single DLL output
+        run: |
+          if [ -f "src/EmbyFeishu/bin/Release/EmbyFeishu.dll" ]; then
+            echo "Build artifact: EmbyFeishu.dll"
+            ls -la src/EmbyFeishu/bin/Release/EmbyFeishu.dll
+          else
+            echo "::error::EmbyFeishu.dll not found"
+            exit 1
+          fi

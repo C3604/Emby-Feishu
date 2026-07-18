@@ -13,8 +13,11 @@ namespace EmbyFeishu.Configuration.Groups
     {
         public override string EditorTitle => "消息显示";
 
+        public override string EditorDescription
+            => "控制飞书消息的外观样式。推荐新用户使用 FeishuCard（飞书卡片），展示效果更丰富";
+
         [DisplayName("消息格式")]
-        [Description("Text=纯文本（默认，与旧版一致）；FeishuCard=飞书交互卡片")]
+        [Description("Text=纯文本（默认，兼容性好）；FeishuCard=飞书交互卡片（推荐，带颜色标题和字段分组）")]
         public MessageFormat MessageFormat { get; set; } = MessageFormat.Text;
 
         [DisplayName("详细程度")]

@@ -12,15 +12,21 @@ namespace EmbyFeishu.Configuration.Groups
     {
         public override string EditorTitle => "登录与用户";
 
+        public override string EditorDescription
+            => "登录安全事件默认开启告警级别通知。建议至少保留「登录失败」和「用户锁定」以监控异常访问";
+
         // 登录安全
         [DisplayName("通知登录成功")]
+        [Description("每次用户成功登录时推送（频率可能较高，建议配合用户过滤使用）")]
         [IsAdvanced]
         public bool NotifyAuthenticationSucceeded { get; set; } = false;
 
         [DisplayName("通知登录失败")]
+        [Description("用户名或密码错误时推送安全告警（推荐开启，可及时发现暴力破解）")]
         public bool NotifyAuthenticationFailed { get; set; } = true;
 
         [DisplayName("通知用户被锁定")]
+        [Description("用户因连续登录失败被锁定时推送紧急告警")]
         public bool NotifyUserLockedOut { get; set; } = true;
 
         // 会话

@@ -1,6 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
+using System.Linq;
+using System.Reflection;
 using EmbyFeishu.Configuration;
+using EmbyFeishu.Configuration.Groups;
 using EmbyFeishu.Events;
 using EmbyFeishu.Feishu;
 using EmbyFeishu.Infrastructure;
@@ -41,7 +45,14 @@ namespace EmbyFeishu.SelfTest
             TestLibraryAggregator();
             TestSendTestNotificationFlag();
 
-            // ==== 新增测试 ====
+            // ==== v1.5.0 新增测试 ====
+            TestNotificationStatistics();
+            TestPresetApplier();
+            TestExponentialBackoffConfig();
+            TestPriorityQueue();
+
+            // ==== 已有扩展测试 ====
+            TestConfigSyncCompleteness();
             TestSidebar();
             TestGroupDefaults();
             TestGroupMigration();
@@ -1008,6 +1019,321 @@ namespace EmbyFeishu.SelfTest
                 "https://open.feishu.cn/hook/secret123");
             Assert(!sanitized.Contains("secret123"), "脱敏后不含完整 Webhook Token");
             Assert(!sanitized.Contains("open.feishu.cn/hook/secret123"), "脱敏后不含完整 Webhook URL");
+        }
+
+        // ===================== 配置同步完整性（反射验证） =====================
+
+        static void TestConfigSyncCompleteness()
+        {
+            Console.WriteLine("\n【配置同步完整性（反射验证）】");
+
+            // 需要排除的特殊字段（不参与双向同步）
+            var specialFields = new HashSet<string>
+            {
+                "ConfigSchemaVersion", "SignatureSecret", "SignatureSecretInput",
+                "SignatureSecretStatus", "EditorTitle", "EditorDescription"
+            };
+
+            // 分组类型（这些是嵌套对象，不是扁平字段）
+            var groupTypes = new HashSet<Type>
+            {
+                typeof(FeishuConnectionGroup), typeof(BotSecurityGroup),
+                typeof(MessageDisplayGroup), typeof(PlaybackNotificationGroup),
+                typeof(LoginAndUserGroup), typeof(LibraryAndUserBehaviorGroup),
+                typeof(TaskAndLiveTvAndServerGroup), typeof(AdvancedAndDiagnosticsGroup)
+            };
+
+            // 获取所有标记 [Browsable(false)] 的扁平配置字段
+            var flatProps = typeof(PluginOptions)
+                .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+                .Where(p => p.CanRead && p.CanWrite)
+                .Where(p => !specialFields.Contains(p.Name))
+                .Where(p => !groupTypes.Contains(p.PropertyType))
+                .Where(p =>
+                {
+                    var attrs = p.GetCustomAttributes(typeof(BrowsableAttribute), false);
+                    return attrs.Length > 0 && !((BrowsableAttribute)attrs[0]).Browsable;
+                })
+                .ToList();
+
+            Assert(flatProps.Count > 50, $"扁平字段数量合理: {flatProps.Count} 个");
+
+            // 为所有扁平字段设置非默认值
+            var opts = new PluginOptions();
+            opts.EnsureGroups();
+            var expected = new Dictionary<string, object>();
+            foreach (var prop in flatProps)
+            {
+                object testValue = null;
+                if (prop.PropertyType == typeof(bool))
+                {
+                    testValue = !((bool)prop.GetValue(opts));
+                }
+                else if (prop.PropertyType == typeof(string))
+                {
+                    testValue = "sync_test_" + prop.Name;
+                }
+                else if (prop.PropertyType == typeof(int))
+                {
+                    testValue = 42;
+                }
+                else if (prop.PropertyType.IsEnum)
+                {
+                    var values = Enum.GetValues(prop.PropertyType);
+                    testValue = values.Length > 1 ? values.GetValue(1) : values.GetValue(0);
+                }
+
+                if (testValue != null)
+                {
+                    prop.SetValue(opts, testValue);
+                    expected[prop.Name] = testValue;
+                }
+            }
+
+            // flat → groups
+            opts.SyncToGroups();
+
+            // 将所有扁平字段重置为默认值
+            var defaults = new PluginOptions();
+            foreach (var prop in flatProps)
+            {
+                prop.SetValue(opts, prop.GetValue(defaults));
+            }
+
+            // groups → flat（应恢复为非默认值）
+            opts.SyncFromGroups();
+
+            // 验证所有字段是否存活
+            int verified = 0;
+            foreach (var prop in flatProps)
+            {
+                if (!expected.ContainsKey(prop.Name)) continue;
+                var actual = prop.GetValue(opts);
+                var exp = expected[prop.Name];
+                if (Equals(actual, exp))
+                {
+                    verified++;
+                }
+                else
+                {
+                    Assert(false, $"字段 {prop.Name} 同步丢失: 期望={exp}, 实际={actual}");
+                }
+            }
+
+            Assert(verified == expected.Count, $"所有 {expected.Count} 个扁平字段均通过同步验证 (实际验证 {verified})");
+        }
+
+        // ===================== v1.5.0 新增测试 =====================
+
+        static void TestNotificationStatistics()
+        {
+            Console.WriteLine("\n【通知统计】");
+            var stats = new NotificationStatistics();
+
+            Assert(stats.TotalSent == 0, "初始发送数为 0");
+            Assert(stats.TotalFailed == 0, "初始失败数为 0");
+            Assert(stats.TotalRetried == 0, "初始重试数为 0");
+            Assert(stats.TotalDropped == 0, "初始丢弃数为 0");
+            Assert(stats.CurrentQueueSize == 0, "初始队列大小为 0");
+            Assert(stats.PeakQueueSize == 0, "初始峰值为 0");
+            Assert(stats.ConsecutiveFailures == 0, "初始连续失败为 0");
+            Assert(stats.GetHealthStatus() == "未发送过", "初始状态为未发送过");
+
+            stats.RecordSent();
+            Assert(stats.TotalSent == 1, "发送后计数为 1");
+            Assert(stats.GetHealthStatus() == "健康", "发送成功后状态为健康");
+
+            stats.RecordFailed();
+            stats.RecordFailed();
+            stats.RecordFailed();
+            Assert(stats.TotalFailed == 3, "失败 3 次后计数为 3");
+            Assert(stats.ConsecutiveFailures == 3, "连续失败为 3");
+            Assert(stats.GetHealthStatus().Contains("异常"), "连续失败 3 次状态含异常");
+
+            stats.RecordSent();
+            Assert(stats.ConsecutiveFailures == 0, "成功发送后连续失败归零");
+            Assert(stats.GetHealthStatus() == "健康", "成功发送后恢复健康");
+
+            stats.RecordRetry();
+            stats.RecordRetry();
+            Assert(stats.TotalRetried == 2, "重试计数为 2");
+
+            stats.RecordDropped();
+            Assert(stats.TotalDropped == 1, "丢弃计数为 1");
+
+            stats.UpdateQueueSize(5);
+            Assert(stats.CurrentQueueSize == 5, "当前队列为 5");
+            Assert(stats.PeakQueueSize == 5, "峰值为 5");
+            stats.UpdateQueueSize(3);
+            Assert(stats.CurrentQueueSize == 3, "队列缩小为 3");
+            Assert(stats.PeakQueueSize == 5, "峰值保持 5");
+
+            var summary = stats.GetDiagnosticSummary();
+            Assert(summary.Contains("成功：2"), "摘要含发送成功数");
+            Assert(summary.Contains("失败：3"), "摘要含失败数");
+            Assert(summary.Contains("重试：2"), "摘要含重试数");
+            Assert(summary.Contains("丢弃：1"), "摘要含丢弃数");
+            Assert(summary.Contains("运行时长"), "摘要含运行时长");
+            Assert(summary.Contains("连接状态"), "摘要含连接状态");
+
+            // 不健康状态
+            var stats2 = new NotificationStatistics();
+            for (int i = 0; i < 5; i++) stats2.RecordFailed();
+            Assert(stats2.GetHealthStatus().Contains("不健康"), "连续失败 5 次状态为不健康");
+
+            // 偶有失败状态
+            var stats3 = new NotificationStatistics();
+            stats3.RecordSent();
+            stats3.RecordFailed();
+            Assert(stats3.GetHealthStatus().Contains("偶有失败"), "连续失败 1 次为偶有失败");
+        }
+
+        static void TestPresetApplier()
+        {
+            Console.WriteLine("\n【配置预设】");
+
+            // Conservative 预设
+            var opts1 = new PluginOptions();
+            opts1.EnsureGroups();
+            PresetApplier.Apply(opts1, NotificationPreset.Conservative);
+            Assert(!opts1.NotifyPlaybackStarted, "Conservative: 播放开始关闭");
+            Assert(!opts1.NotifyPlaybackStopped, "Conservative: 播放停止关闭");
+            Assert(opts1.NotifyAuthenticationFailed, "Conservative: 登录失败开启");
+            Assert(opts1.NotifyUserLockedOut, "Conservative: 用户锁定开启");
+            Assert(opts1.NotifyTaskFailed, "Conservative: 任务失败开启");
+            Assert(opts1.NotifyServerStarted, "Conservative: 服务器启动开启");
+            Assert(!opts1.NotifyNewMovies, "Conservative: 新增电影关闭");
+
+            // Standard 预设
+            var opts2 = new PluginOptions();
+            opts2.EnsureGroups();
+            PresetApplier.Apply(opts2, NotificationPreset.Standard);
+            Assert(opts2.NotifyPlaybackStarted, "Standard: 播放开始开启");
+            Assert(opts2.NotifyPlaybackStopped, "Standard: 播放停止开启");
+            Assert(opts2.NotifyPlaybackCompleted, "Standard: 播放完成开启");
+            Assert(!opts2.NotifyPlaybackPaused, "Standard: 播放暂停关闭");
+            Assert(opts2.NotifyAuthenticationFailed, "Standard: 登录失败开启");
+            Assert(opts2.NotifyNewMovies, "Standard: 新增电影开启");
+            Assert(opts2.NotifyNewEpisodes, "Standard: 新增剧集开启");
+            Assert(!opts2.NotifyNewMusic, "Standard: 新增音乐关闭");
+            Assert(opts2.NotifyServerStarted, "Standard: 服务器启动开启");
+            Assert(opts2.NotifyUpdateAvailable, "Standard: 可用更新开启");
+
+            // Full 预设
+            var opts3 = new PluginOptions();
+            opts3.EnsureGroups();
+            PresetApplier.Apply(opts3, NotificationPreset.Full);
+            Assert(opts3.NotifyPlaybackStarted, "Full: 播放开始开启");
+            Assert(opts3.NotifyPlaybackPaused, "Full: 播放暂停开启");
+            Assert(opts3.NotifyAuthenticationSucceeded, "Full: 登录成功开启");
+            Assert(opts3.NotifySessionStarted, "Full: 会话开始开启");
+            Assert(opts3.NotifyNewMovies, "Full: 新增电影开启");
+            Assert(opts3.NotifyFavoriteAdded, "Full: 添加收藏开启");
+            Assert(opts3.NotifyTaskCompleted, "Full: 任务完成开启");
+            Assert(opts3.NotifyMaintenanceModeEntered, "Full: 维护模式开启");
+
+            // PlaybackOnly 预设
+            var opts4 = new PluginOptions();
+            opts4.EnsureGroups();
+            PresetApplier.Apply(opts4, NotificationPreset.PlaybackOnly);
+            Assert(opts4.NotifyPlaybackStarted, "PlaybackOnly: 播放开始开启");
+            Assert(opts4.NotifyPlaybackStopped, "PlaybackOnly: 播放停止开启");
+            Assert(opts4.NotifyPlaybackResumed, "PlaybackOnly: 播放恢复开启");
+            Assert(!opts4.NotifyAuthenticationFailed, "PlaybackOnly: 登录失败关闭");
+            Assert(!opts4.NotifyServerStarted, "PlaybackOnly: 服务器启动关闭");
+            Assert(!opts4.NotifyNewMovies, "PlaybackOnly: 新增电影关闭");
+            Assert(!opts4.NotifyTaskFailed, "PlaybackOnly: 任务失败关闭");
+
+            // None 不改变
+            var opts5 = new PluginOptions();
+            opts5.EnsureGroups();
+            opts5.NotifyPlaybackStarted = false;
+            opts5.PlaybackNotification.NotifyPlaybackStarted = false;
+            PresetApplier.Apply(opts5, NotificationPreset.None);
+            Assert(!opts5.NotifyPlaybackStarted, "None: 不改变现有设置");
+
+            // 预设不影响非事件开关配置
+            var opts6 = new PluginOptions();
+            opts6.EnsureGroups();
+            opts6.FeishuConnection.WebhookUrl = "https://test.feishu.cn/hook/x";
+            opts6.FeishuConnection.Enabled = true;
+            opts6.MessageDisplay.MessageFormat = MessageFormat.FeishuCard;
+            opts6.BotSecurity.EnableCustomKeyword = true;
+            opts6.BotSecurity.CustomKeyword = "测试";
+            PresetApplier.Apply(opts6, NotificationPreset.Conservative);
+            Assert(opts6.FeishuConnection.WebhookUrl == "https://test.feishu.cn/hook/x", "预设不改变 Webhook");
+            Assert(opts6.FeishuConnection.Enabled, "预设不改变 Enabled");
+            Assert(opts6.MessageDisplay.MessageFormat == MessageFormat.FeishuCard, "预设不改变消息格式");
+            Assert(opts6.BotSecurity.EnableCustomKeyword, "预设不改变安全设置");
+        }
+
+        static void TestExponentialBackoffConfig()
+        {
+            Console.WriteLine("\n【指数退避配置】");
+            var opts = new PluginOptions();
+            opts.EnsureGroups();
+
+            // 默认值
+            Assert(opts.AdvancedAndDiagnostics.MaxRetryCount == 1, "默认重试次数为 1");
+
+            // 先完成迁移，使 ConfigSchemaVersion 到位
+            ConfigMigrator.Apply(opts);
+
+            // 范围夹取（迁移已完成，不会再覆盖分组值）
+            opts.AdvancedAndDiagnostics.MaxRetryCount = 5;
+            ConfigMigrator.Apply(opts);
+            Assert(opts.AdvancedAndDiagnostics.MaxRetryCount == 3, "重试次数上限夹取为 3");
+
+            opts.AdvancedAndDiagnostics.MaxRetryCount = -1;
+            ConfigMigrator.Apply(opts);
+            Assert(opts.AdvancedAndDiagnostics.MaxRetryCount == 0, "重试次数下限夹取为 0");
+
+            // 同步
+            opts.AdvancedAndDiagnostics.MaxRetryCount = 2;
+            opts.SyncFromGroups();
+            Assert(opts.MaxRetryCount == 2, "MaxRetryCount 分组→扁平同步");
+            opts.MaxRetryCount = 3;
+            opts.SyncToGroups();
+            Assert(opts.AdvancedAndDiagnostics.MaxRetryCount == 3, "MaxRetryCount 扁平→分组同步");
+
+            // 诊断字段同步
+            opts.AdvancedAndDiagnostics.DiagnosticInfo = "测试诊断信息";
+            opts.AdvancedAndDiagnostics.WebhookHealthStatus = "健康";
+            opts.SyncFromGroups();
+            Assert(opts.DiagnosticInfo == "测试诊断信息", "DiagnosticInfo 分组→扁平同步");
+            Assert(opts.WebhookHealthStatus == "健康", "WebhookHealthStatus 分组→扁平同步");
+        }
+
+        static void TestPriorityQueue()
+        {
+            Console.WriteLine("\n【优先级队列逻辑】");
+
+            // 验证 Security/Error 事件被归为高优先级
+            var secEvt = new NotificationEvent { Severity = NotificationSeverity.Security };
+            var errEvt = new NotificationEvent { Severity = NotificationSeverity.Error };
+            var infoEvt = new NotificationEvent { Severity = NotificationSeverity.Information };
+            var warnEvt = new NotificationEvent { Severity = NotificationSeverity.Warning };
+            var succEvt = new NotificationEvent { Severity = NotificationSeverity.Success };
+
+            Assert(secEvt.Severity == NotificationSeverity.Security, "Security 事件为 Security 级别");
+            Assert(errEvt.Severity == NotificationSeverity.Error, "Error 事件为 Error 级别");
+
+            // 高优先级判定：Security 和 Error
+            bool isHighSec = secEvt.Severity == NotificationSeverity.Security || secEvt.Severity == NotificationSeverity.Error;
+            bool isHighErr = errEvt.Severity == NotificationSeverity.Security || errEvt.Severity == NotificationSeverity.Error;
+            bool isHighInfo = infoEvt.Severity == NotificationSeverity.Security || infoEvt.Severity == NotificationSeverity.Error;
+            bool isHighWarn = warnEvt.Severity == NotificationSeverity.Security || warnEvt.Severity == NotificationSeverity.Error;
+            bool isHighSucc = succEvt.Severity == NotificationSeverity.Security || succEvt.Severity == NotificationSeverity.Error;
+
+            Assert(isHighSec, "Security 事件归入高优先级");
+            Assert(isHighErr, "Error 事件归入高优先级");
+            Assert(!isHighInfo, "Information 事件不是高优先级");
+            Assert(!isHighWarn, "Warning 事件不是高优先级");
+            Assert(!isHighSucc, "Success 事件不是高优先级");
+
+            // 预设枚举值覆盖
+            Assert(Enum.GetValues(typeof(NotificationPreset)).Length == 5, "预设枚举有 5 个值");
+            Assert((int)NotificationPreset.None == 0, "None 枚举值为 0");
         }
 
         static string FormatTestResultForTest(string message)

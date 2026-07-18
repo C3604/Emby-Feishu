@@ -16,5 +16,8 @@ namespace EmbyFeishu.Events
 
         /// <summary>停止后台处理并释放资源</summary>
         void Stop();
+
+        /// <summary>运行统计</summary>
+        NotificationStatistics Statistics { get; }
     }
 }

@@ -12,12 +12,17 @@ namespace EmbyFeishu.Configuration.Groups
     {
         public override string EditorTitle => "媒体库与用户行为";
 
+        public override string EditorDescription
+            => "媒体库变动事件在批量入库时可能非常频繁。建议开启「媒体库聚合」将短时间内的变动合并为一条汇总消息";
+
         // 媒体库新增
         [DisplayName("通知新增电影")]
+        [Description("新电影入库时推送通知")]
         [IsAdvanced]
         public bool NotifyNewMovies { get; set; } = false;
 
         [DisplayName("通知新增剧集")]
+        [Description("新剧集入库时推送通知")]
         [IsAdvanced]
         public bool NotifyNewEpisodes { get; set; } = false;
 

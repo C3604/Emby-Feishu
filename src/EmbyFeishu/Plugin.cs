@@ -3,9 +3,11 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using System.Threading;
+using EmbyFeishu.Configuration;
 using EmbyFeishu.Configuration.Groups;
 using EmbyFeishu.Feishu;
 using EmbyFeishu.Infrastructure;
+using EmbyFeishu.Models;
 using MediaBrowser.Common;
 using MediaBrowser.Common.Net;
 using MediaBrowser.Common.Plugins;
@@ -103,6 +105,17 @@ namespace EmbyFeishu
             if (options == null) return true;
 
             options.EnsureGroups();
+
+            // 处理预设应用
+            if (options.AdvancedAndDiagnostics.ApplyPreset != NotificationPreset.None)
+            {
+                var preset = options.AdvancedAndDiagnostics.ApplyPreset;
+                _logger.Info("[EmbyFeishu] 正在应用预设：{0}", preset);
+                PresetApplier.Apply(options, preset);
+                options.AdvancedAndDiagnostics.ApplyPreset = NotificationPreset.None;
+                options.ApplyPreset = NotificationPreset.None;
+            }
+
             // 将分组对象的值回写到旧扁平字段，保证 JSON 序列化时两组数据一致
             options.SyncFromGroups();
 

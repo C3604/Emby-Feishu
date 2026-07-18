@@ -12,13 +12,13 @@ namespace EmbyFeishu.Events
 {
     /// <summary>
     /// 后台通知调度器，线程安全，可停止。承载统一事件模型 NotificationEvent。
-    /// 支持按配置选择文本或卡片格式，卡片失败时按配置回退文本一次。
-    /// 在构建飞书请求时统一注入关键词和签名。
+    /// 支持优先级队列（安全事件优先）、指数退避重试、卡片回退文本。
     /// </summary>
     public class NotificationDispatcher : INotificationDispatcher
     {
-        private const int MaxQueueSize = 200;
-        private readonly ConcurrentQueue<NotificationEvent> _queue = new ConcurrentQueue<NotificationEvent>();
+        private const int DefaultMaxQueueSize = 200;
+        private readonly ConcurrentQueue<NotificationEvent> _highPriorityQueue = new ConcurrentQueue<NotificationEvent>();
+        private readonly ConcurrentQueue<NotificationEvent> _normalQueue = new ConcurrentQueue<NotificationEvent>();
         private readonly SemaphoreSlim _signal = new SemaphoreSlim(0);
         private readonly CancellationTokenSource _cts = new CancellationTokenSource();
         private readonly IFeishuWebhookClient _webhookClient;
@@ -26,9 +26,12 @@ namespace EmbyFeishu.Events
         private readonly INotificationFormatter _cardFormatter;
         private readonly IFeishuMessageSecurityDecorator _securityDecorator;
         private readonly ILogger _logger;
+        private readonly NotificationStatistics _statistics;
         private Task _processingTask;
         private volatile int _queueCount;
         private volatile bool _disposed;
+
+        public NotificationStatistics Statistics => _statistics;
 
         public NotificationDispatcher(
             IFeishuWebhookClient webhookClient,
@@ -36,35 +39,60 @@ namespace EmbyFeishu.Events
             INotificationFormatter cardFormatter,
             IFeishuMessageSecurityDecorator securityDecorator,
             ILogger logger)
+            : this(webhookClient, textFormatter, cardFormatter, securityDecorator, logger, null)
+        {
+        }
+
+        public NotificationDispatcher(
+            IFeishuWebhookClient webhookClient,
+            INotificationFormatter textFormatter,
+            INotificationFormatter cardFormatter,
+            IFeishuMessageSecurityDecorator securityDecorator,
+            ILogger logger,
+            NotificationStatistics statistics)
         {
             _webhookClient = webhookClient;
             _textFormatter = textFormatter;
             _cardFormatter = cardFormatter;
             _securityDecorator = securityDecorator;
             _logger = logger;
+            _statistics = statistics ?? new NotificationStatistics();
         }
 
         public void Enqueue(NotificationEvent evt)
         {
             if (_disposed || evt == null) return;
 
-            if (_queueCount >= MaxQueueSize)
+            if (_queueCount >= DefaultMaxQueueSize)
             {
-                _queue.TryDequeue(out _);
-                Interlocked.Decrement(ref _queueCount);
-                _logger.Warn("[EmbyFeishu] 通知队列已满（{0}），丢弃最旧消息", MaxQueueSize);
+                if (_normalQueue.TryDequeue(out _))
+                {
+                    Interlocked.Decrement(ref _queueCount);
+                }
+                _statistics.RecordDropped();
+                _logger.Warn("[EmbyFeishu] 通知队列已满（{0}），丢弃最旧消息", DefaultMaxQueueSize);
             }
 
-            _queue.Enqueue(evt);
+            var isHighPriority = evt.Severity == NotificationSeverity.Security
+                              || evt.Severity == NotificationSeverity.Error;
+
+            if (isHighPriority)
+                _highPriorityQueue.Enqueue(evt);
+            else
+                _normalQueue.Enqueue(evt);
+
             Interlocked.Increment(ref _queueCount);
+            _statistics.UpdateQueueSize(_queueCount);
             _signal.Release();
-            _logger.Debug("[EmbyFeishu] 通知已入队: {0} - {1}", evt.EventType, evt.ItemName ?? evt.UserName ?? "");
+            _logger.Debug("[EmbyFeishu] 通知已入队({0}): {1} - {2}",
+                isHighPriority ? "高优先" : "普通",
+                evt.EventType, evt.ItemName ?? evt.UserName ?? "");
         }
 
         public void Start()
         {
             _processingTask = Task.Run(() => ProcessLoop());
-            _logger.Info("[EmbyFeishu] 通知调度器已启动");
+            _logger.Info("[EmbyFeishu] 通知调度器已启动（优先级队列 + 指数退避）");
         }
 
         public void Stop()
@@ -105,9 +133,28 @@ namespace EmbyFeishu.Events
 
                 if (token.IsCancellationRequested || _disposed) break;
 
-                while (_queue.TryDequeue(out var evt))
+                // 优先处理高优先级队列
+                while (_highPriorityQueue.TryDequeue(out var highEvt))
                 {
                     Interlocked.Decrement(ref _queueCount);
+                    _statistics.UpdateQueueSize(_queueCount);
+                    if (token.IsCancellationRequested || _disposed) break;
+
+                    try
+                    {
+                        await SendNotificationAsync(highEvt, token).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.Error("[EmbyFeishu] 发送高优先通知时发生未预期异常: {0}", ex.Message);
+                    }
+                }
+
+                // 再处理普通队列
+                while (_normalQueue.TryDequeue(out var evt))
+                {
+                    Interlocked.Decrement(ref _queueCount);
+                    _statistics.UpdateQueueSize(_queueCount);
                     if (token.IsCancellationRequested || _disposed) break;
 
                     try
@@ -131,13 +178,15 @@ namespace EmbyFeishu.Events
             var webhookUrl = options.WebhookUrl;
             var timeoutMs = options.RequestTimeoutSeconds * 1000;
             var useCard = options.MessageFormat == MessageFormat.FeishuCard;
+            var maxRetries = Math.Max(0, Math.Min(options.MaxRetryCount, 3));
 
-            // 主格式发送（含一次瞬时错误重试）
+            // 主格式发送（含指数退避重试）
             var primaryFormatter = useCard ? _cardFormatter : _textFormatter;
-            var result = await SendWithRetryAsync(evt, primaryFormatter, options, webhookUrl, timeoutMs, token).ConfigureAwait(false);
+            var result = await SendWithExponentialBackoffAsync(evt, primaryFormatter, options, webhookUrl, timeoutMs, maxRetries, token).ConfigureAwait(false);
 
             if (result.Success)
             {
+                _statistics.RecordSent();
                 _logger.Info("[EmbyFeishu] 通知发送成功: {0} - {1}", evt.EventType, evt.UserName ?? evt.ItemName ?? "");
                 return;
             }
@@ -146,32 +195,65 @@ namespace EmbyFeishu.Events
             if (useCard && options.FallbackToTextOnCardFailure && !token.IsCancellationRequested)
             {
                 _logger.Warn("[EmbyFeishu] 卡片发送失败，回退为文本: {0}", result.ErrorMessage ?? "未知错误");
-                var textResult = await SendWithRetryAsync(evt, _textFormatter, options, webhookUrl, timeoutMs, token).ConfigureAwait(false);
+                var textResult = await SendWithExponentialBackoffAsync(evt, _textFormatter, options, webhookUrl, timeoutMs, maxRetries, token).ConfigureAwait(false);
                 if (textResult.Success)
                 {
+                    _statistics.RecordSent();
                     _logger.Info("[EmbyFeishu] 文本回退发送成功: {0}", evt.EventType);
                     return;
                 }
+                _statistics.RecordFailed();
                 _logger.Warn("[EmbyFeishu] 文本回退仍失败: {0}", textResult.ErrorMessage ?? "未知错误");
                 return;
             }
 
+            _statistics.RecordFailed();
             _logger.Warn("[EmbyFeishu] 通知发送失败: {0}", result.ErrorMessage ?? "未知错误");
         }
 
         /// <summary>
-        /// 用指定格式化器发送，瞬时错误最多重试一次。
-        /// 每次尝试都重新应用安全装饰（签名重新生成）。
+        /// 用指数退避策略发送，延迟序列为 1s, 2s, 4s...
+        /// 每次重试都重新构造消息体并重新生成签名。
         /// </summary>
-        private async Task<WebhookSendResult> SendWithRetryAsync(
-            NotificationEvent evt, INotificationFormatter formatter, PluginOptions options, string url, int timeoutMs, CancellationToken token)
+        private async Task<WebhookSendResult> SendWithExponentialBackoffAsync(
+            NotificationEvent evt, INotificationFormatter formatter, PluginOptions options,
+            string url, int timeoutMs, int maxRetries, CancellationToken token)
         {
-            return await TrySendAsync(evt, formatter, options, url, timeoutMs, token, isRetry: false).ConfigureAwait(false);
+            WebhookSendResult lastResult = null;
+
+            for (int attempt = 0; attempt <= maxRetries; attempt++)
+            {
+                if (token.IsCancellationRequested)
+                    return lastResult ?? WebhookSendResult.Fail("已取消", false);
+
+                // 重试前等待（指数退避）
+                if (attempt > 0)
+                {
+                    _statistics.RecordRetry();
+                    var delayMs = 1000 * (1 << (attempt - 1)); // 1s, 2s, 4s
+                    _logger.Debug("[EmbyFeishu] 第 {0} 次重试，等待 {1}ms", attempt, delayMs);
+                    try
+                    {
+                        await Task.Delay(delayMs, token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        return lastResult ?? WebhookSendResult.Fail("已取消", false);
+                    }
+                }
+
+                lastResult = await TrySendOnceAsync(evt, formatter, options, url, timeoutMs, token).ConfigureAwait(false);
+
+                if (lastResult.Success || !lastResult.ShouldRetry)
+                    return lastResult;
+            }
+
+            return lastResult ?? WebhookSendResult.Fail("未知错误", false);
         }
 
-        private async Task<WebhookSendResult> TrySendAsync(
+        private async Task<WebhookSendResult> TrySendOnceAsync(
             NotificationEvent evt, INotificationFormatter formatter, PluginOptions options,
-            string url, int timeoutMs, CancellationToken token, bool isRetry)
+            string url, int timeoutMs, CancellationToken token)
         {
             object body;
             try
@@ -184,43 +266,25 @@ namespace EmbyFeishu.Events
                 return WebhookSendResult.Fail("构造消息体失败", false);
             }
 
-            // 将格式化器返回的 FeishuWebhookRequest 转换为字典以便安全装饰
             var requestBody = ConvertToDictionary(body, options);
-            // 应用签名+时间戳
             requestBody = (Dictionary<string, object>)_securityDecorator.DecorateRequest(requestBody, options);
 
-            var result = await _webhookClient.SendAsync(url, requestBody, timeoutMs, token).ConfigureAwait(false);
-            if (result.Success || !result.ShouldRetry || token.IsCancellationRequested)
-                return result;
-
-            // 重试时重新生成签名
-            if (!isRetry)
-            {
-                try { await Task.Delay(1000, token).ConfigureAwait(false); }
-                catch (OperationCanceledException) { return result; }
-
-                return await TrySendAsync(evt, formatter, options, url, timeoutMs, token, isRetry: true).ConfigureAwait(false);
-            }
-
-            return result;
+            return await _webhookClient.SendAsync(url, requestBody, timeoutMs, token).ConfigureAwait(false);
         }
 
         /// <summary>
         /// 将格式化器输出的对象转为字典，同时应用文本/卡片关键词装饰。
-        /// 确保 FeishuWebhookRequest 和字典格式都能处理。
         /// </summary>
         private Dictionary<string, object> ConvertToDictionary(object body, PluginOptions options)
         {
             if (body is Dictionary<string, object> dict)
             {
-                // 如果是卡片格式（msg_type=interactive），先装饰卡片内容再装饰请求
                 if (dict.TryGetValue("msg_type", out var mt) && mt is string msgType && msgType == "interactive")
                 {
                     dict = (Dictionary<string, object>)_securityDecorator.DecorateCard(dict, options);
                 }
                 else if (dict.TryGetValue("msg_type", out var mt2) && mt2 is string msgType2 && msgType2 == "text")
                 {
-                    // 文本格式：装饰 text 内容
                     if (dict.TryGetValue("content", out var contentObj) && contentObj is Dictionary<string, object> contentDict)
                     {
                         if (contentDict.TryGetValue("text", out var textObj) && textObj is string text)
@@ -234,7 +298,6 @@ namespace EmbyFeishu.Events
 
             if (body is FeishuWebhookRequest request)
             {
-                // 文本格式的 FeishuWebhookRequest
                 var result = new Dictionary<string, object>();
                 result["msg_type"] = request.msg_type ?? "text";
 
@@ -255,7 +318,6 @@ namespace EmbyFeishu.Events
                 return result;
             }
 
-            // 未知类型，尝试作为通用对象序列化
             return new Dictionary<string, object>
             {
                 ["msg_type"] = "text",

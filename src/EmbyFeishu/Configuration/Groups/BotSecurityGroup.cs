@@ -13,7 +13,8 @@ namespace EmbyFeishu.Configuration.Groups
         public override string EditorTitle => "机器人安全校验";
 
         public override string EditorDescription
-            => "自定义关键词和签名校验需要与飞书群机器人安全设置保持一致。插件中的设置不会自动修改飞书机器人配置。";
+            => "安全设置必须与飞书群机器人后台一致，否则消息将被飞书拒绝。\n"
+             + "飞书安全设置入口：群设置 → 群机器人 → 选择机器人 → 安全设置";
 
         [DisplayName("启用自定义关键词")]
         [Description("开启后，插件发送的每一条消息都会携带该关键词。请确保它与飞书机器人安全设置中的自定义关键词完全一致。")]

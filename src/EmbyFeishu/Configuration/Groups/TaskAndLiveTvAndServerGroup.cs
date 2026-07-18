@@ -12,8 +12,12 @@ namespace EmbyFeishu.Configuration.Groups
     {
         public override string EditorTitle => "任务、Live TV 与服务器";
 
+        public override string EditorDescription
+            => "后台任务、Live TV 录制和服务器状态变化的通知。建议至少保留「任务失败」和「服务器启动」";
+
         // 任务
         [DisplayName("通知任务失败")]
+        [Description("后台计划任务执行失败时推送告警（推荐开启）")]
         public bool NotifyTaskFailed { get; set; } = true;
 
         [DisplayName("通知任务完成")]

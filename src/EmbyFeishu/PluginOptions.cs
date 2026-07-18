@@ -141,6 +141,11 @@ namespace EmbyFeishu
         [Browsable(false)] public bool IncludePlaybackPosition { get; set; } = false;
         [Browsable(false)] public bool IncludePlayedToCompletion { get; set; } = true;
 
+        [Browsable(false)] public int MaxRetryCount { get; set; } = 1;
+        [Browsable(false)] public NotificationPreset ApplyPreset { get; set; } = NotificationPreset.None;
+        [Browsable(false)] public string DiagnosticInfo { get; set; } = "插件尚未启动";
+        [Browsable(false)] public string WebhookHealthStatus { get; set; } = "未知";
+
         [Browsable(false)] public bool SendTestNotification { get; set; } = false;
         [Browsable(false)] public string LastTestResult { get; set; } = "";
 
@@ -321,116 +326,7 @@ namespace EmbyFeishu
         /// </summary>
         public void SyncToGroups()
         {
-            EnsureGroups();
-
-            // 飞书连接
-            FeishuConnection.Enabled = Enabled;
-            FeishuConnection.WebhookUrl = WebhookUrl ?? "";
-            FeishuConnection.RequestTimeoutSeconds = RequestTimeoutSeconds;
-
-            // 机器人安全
-            BotSecurity.EnableCustomKeyword = EnableCustomKeyword;
-            BotSecurity.CustomKeyword = CustomKeyword ?? "";
-            BotSecurity.EnableSignatureVerification = EnableSignatureVerification;
-            BotSecurity.SignatureSecretStatus = !string.IsNullOrEmpty(SignatureSecret) ? "已配置" : "未配置";
-
-            // 消息显示
-            MessageDisplay.MessageFormat = MessageFormat;
-            MessageDisplay.MessageDetailLevel = MessageDetailLevel;
-            MessageDisplay.ShowServerName = ShowServerName;
-            MessageDisplay.ShowEventTime = ShowEventTime;
-            MessageDisplay.IpAddressDisplayMode = IpAddressDisplayMode;
-            MessageDisplay.DeviceIdDisplayMode = DeviceIdDisplayMode;
-            MessageDisplay.FallbackToTextOnCardFailure = FallbackToTextOnCardFailure;
-            MessageDisplay.ShowSensitiveTechnicalDetails = ShowSensitiveTechnicalDetails;
-            MessageDisplay.IncludeUserName = IncludeUserName;
-            MessageDisplay.IncludeMediaTitle = IncludeMediaTitle;
-            MessageDisplay.IncludeMediaType = IncludeMediaType;
-            MessageDisplay.IncludeSeriesEpisode = IncludeSeriesEpisode;
-            MessageDisplay.IncludeClientName = IncludeClientName;
-            MessageDisplay.IncludeDeviceName = IncludeDeviceName;
-            MessageDisplay.IncludePlaybackPosition = IncludePlaybackPosition;
-            MessageDisplay.IncludePlayedToCompletion = IncludePlayedToCompletion;
-
-            // 播放通知
-            PlaybackNotification.NotifyPlaybackStarted = NotifyPlaybackStarted;
-            PlaybackNotification.NotifyPlaybackStopped = NotifyPlaybackStopped;
-            PlaybackNotification.NotifyPlaybackPaused = NotifyPlaybackPaused;
-            PlaybackNotification.NotifyPlaybackResumed = NotifyPlaybackResumed;
-            PlaybackNotification.NotifyPlaybackCompleted = NotifyPlaybackCompleted;
-            PlaybackNotification.NotifyPlaybackAbandoned = NotifyPlaybackAbandoned;
-            PlaybackNotification.NotifyPlaybackMethodChanged = NotifyPlaybackMethodChanged;
-            PlaybackNotification.NotifyPlaybackMilestones = NotifyPlaybackMilestones;
-            PlaybackNotification.PlaybackMilestones = PlaybackMilestones ?? "25,50,75";
-            PlaybackNotification.MinimumStopSeconds = MinimumStopSeconds;
-            PlaybackNotification.CompletionThresholdPercent = CompletionThresholdPercent;
-            PlaybackNotification.OnlyVideo = OnlyVideo;
-
-            // 登录与用户
-            LoginAndUser.NotifyAuthenticationSucceeded = NotifyAuthenticationSucceeded;
-            LoginAndUser.NotifyAuthenticationFailed = NotifyAuthenticationFailed;
-            LoginAndUser.NotifyUserLockedOut = NotifyUserLockedOut;
-            LoginAndUser.NotifySessionStarted = NotifySessionStarted;
-            LoginAndUser.NotifySessionEnded = NotifySessionEnded;
-            LoginAndUser.NotifyRemoteControlDisconnected = NotifyRemoteControlDisconnected;
-            LoginAndUser.NotifyPartyJoined = NotifyPartyJoined;
-            LoginAndUser.NotifyPartyLeft = NotifyPartyLeft;
-            LoginAndUser.NotifyUserPasswordChanged = NotifyUserPasswordChanged;
-            LoginAndUser.NotifyUserCreated = NotifyUserCreated;
-            LoginAndUser.NotifyUserDeleted = NotifyUserDeleted;
-            LoginAndUser.NotifyUserUpdated = NotifyUserUpdated;
-            LoginAndUser.NotifyUserPolicyUpdated = NotifyUserPolicyUpdated;
-            LoginAndUser.NotifyUserConfigurationUpdated = NotifyUserConfigurationUpdated;
-            LoginAndUser.UserFilterMode = UserFilterMode;
-            LoginAndUser.UserNames = UserNames ?? "";
-
-            // 媒体库与用户行为
-            LibraryAndUserBehavior.NotifyNewMovies = NotifyNewMovies;
-            LibraryAndUserBehavior.NotifyNewEpisodes = NotifyNewEpisodes;
-            LibraryAndUserBehavior.NotifyNewMusic = NotifyNewMusic;
-            LibraryAndUserBehavior.NotifyOtherNewItems = NotifyOtherNewItems;
-            LibraryAndUserBehavior.NotifyItemsRemoved = NotifyItemsRemoved;
-            LibraryAndUserBehavior.NotifyItemsUpdated = NotifyItemsUpdated;
-            LibraryAndUserBehavior.EnableLibraryAggregation = EnableLibraryAggregation;
-            LibraryAndUserBehavior.LibraryAggregationWindowSeconds = LibraryAggregationWindowSeconds;
-            LibraryAndUserBehavior.MaximumIndividualLibraryMessages = MaximumIndividualLibraryMessages;
-            LibraryAndUserBehavior.NotifyFavoriteAdded = NotifyFavoriteAdded;
-            LibraryAndUserBehavior.NotifyFavoriteRemoved = NotifyFavoriteRemoved;
-            LibraryAndUserBehavior.NotifyMarkedPlayed = NotifyMarkedPlayed;
-            LibraryAndUserBehavior.NotifyMarkedUnplayed = NotifyMarkedUnplayed;
-            LibraryAndUserBehavior.NotifyUserRatingChanged = NotifyUserRatingChanged;
-
-            // 任务、Live TV 与服务器
-            TaskAndLiveTvAndServer.NotifyTaskFailed = NotifyTaskFailed;
-            TaskAndLiveTvAndServer.NotifyTaskCompleted = NotifyTaskCompleted;
-            TaskAndLiveTvAndServer.NotifyTaskCancelled = NotifyTaskCancelled;
-            TaskAndLiveTvAndServer.NotifyLibraryScanStarted = NotifyLibraryScanStarted;
-            TaskAndLiveTvAndServer.NotifyLibraryScanCompleted = NotifyLibraryScanCompleted;
-            TaskAndLiveTvAndServer.NotifyMetadataRefreshCompleted = NotifyMetadataRefreshCompleted;
-            TaskAndLiveTvAndServer.NotifyBackupCompleted = NotifyBackupCompleted;
-            TaskAndLiveTvAndServer.EnableLiveTvNotifications = EnableLiveTvNotifications;
-            TaskAndLiveTvAndServer.NotifyRecordingStarted = NotifyRecordingStarted;
-            TaskAndLiveTvAndServer.NotifyRecordingEnded = NotifyRecordingEnded;
-            TaskAndLiveTvAndServer.NotifyTimerCreated = NotifyTimerCreated;
-            TaskAndLiveTvAndServer.NotifyTimerUpdated = NotifyTimerUpdated;
-            TaskAndLiveTvAndServer.NotifyTimerCancelled = NotifyTimerCancelled;
-            TaskAndLiveTvAndServer.NotifySeriesTimerCreated = NotifySeriesTimerCreated;
-            TaskAndLiveTvAndServer.NotifySeriesTimerUpdated = NotifySeriesTimerUpdated;
-            TaskAndLiveTvAndServer.NotifySeriesTimerCancelled = NotifySeriesTimerCancelled;
-            TaskAndLiveTvAndServer.NotifyServerStarted = NotifyServerStarted;
-            TaskAndLiveTvAndServer.NotifyServerStopping = NotifyServerStopping;
-            TaskAndLiveTvAndServer.NotifyUpdateAvailable = NotifyUpdateAvailable;
-            TaskAndLiveTvAndServer.NotifyApplicationUpdated = NotifyApplicationUpdated;
-            TaskAndLiveTvAndServer.NotifyRestartRequired = NotifyRestartRequired;
-            TaskAndLiveTvAndServer.NotifyMaintenanceModeEntered = NotifyMaintenanceModeEntered;
-            TaskAndLiveTvAndServer.NotifyMaintenanceModeExited = NotifyMaintenanceModeExited;
-
-            // 高级与诊断
-            AdvancedAndDiagnostics.MaximumNotificationsPerMinute = MaximumNotificationsPerMinute;
-            AdvancedAndDiagnostics.SecurityEventsBypassRateLimit = SecurityEventsBypassRateLimit;
-            AdvancedAndDiagnostics.AggregateWhenRateLimited = AggregateWhenRateLimited;
-            AdvancedAndDiagnostics.SendTestNotification = SendTestNotification;
-            AdvancedAndDiagnostics.LastTestResult = LastTestResult ?? "";
+            Configuration.ConfigSynchronizer.CopyToGroups(this);
         }
 
         /// <summary>
@@ -438,115 +334,7 @@ namespace EmbyFeishu
         /// </summary>
         public void SyncFromGroups()
         {
-            EnsureGroups();
-
-            // 飞书连接
-            Enabled = FeishuConnection.Enabled;
-            WebhookUrl = FeishuConnection.WebhookUrl ?? "";
-            RequestTimeoutSeconds = FeishuConnection.RequestTimeoutSeconds;
-
-            // 机器人安全
-            EnableCustomKeyword = BotSecurity.EnableCustomKeyword;
-            CustomKeyword = BotSecurity.CustomKeyword ?? "";
-            EnableSignatureVerification = BotSecurity.EnableSignatureVerification;
-
-            // 消息显示
-            MessageFormat = MessageDisplay.MessageFormat;
-            MessageDetailLevel = MessageDisplay.MessageDetailLevel;
-            ShowServerName = MessageDisplay.ShowServerName;
-            ShowEventTime = MessageDisplay.ShowEventTime;
-            IpAddressDisplayMode = MessageDisplay.IpAddressDisplayMode;
-            DeviceIdDisplayMode = MessageDisplay.DeviceIdDisplayMode;
-            FallbackToTextOnCardFailure = MessageDisplay.FallbackToTextOnCardFailure;
-            ShowSensitiveTechnicalDetails = MessageDisplay.ShowSensitiveTechnicalDetails;
-            IncludeUserName = MessageDisplay.IncludeUserName;
-            IncludeMediaTitle = MessageDisplay.IncludeMediaTitle;
-            IncludeMediaType = MessageDisplay.IncludeMediaType;
-            IncludeSeriesEpisode = MessageDisplay.IncludeSeriesEpisode;
-            IncludeClientName = MessageDisplay.IncludeClientName;
-            IncludeDeviceName = MessageDisplay.IncludeDeviceName;
-            IncludePlaybackPosition = MessageDisplay.IncludePlaybackPosition;
-            IncludePlayedToCompletion = MessageDisplay.IncludePlayedToCompletion;
-
-            // 播放通知
-            NotifyPlaybackStarted = PlaybackNotification.NotifyPlaybackStarted;
-            NotifyPlaybackStopped = PlaybackNotification.NotifyPlaybackStopped;
-            NotifyPlaybackPaused = PlaybackNotification.NotifyPlaybackPaused;
-            NotifyPlaybackResumed = PlaybackNotification.NotifyPlaybackResumed;
-            NotifyPlaybackCompleted = PlaybackNotification.NotifyPlaybackCompleted;
-            NotifyPlaybackAbandoned = PlaybackNotification.NotifyPlaybackAbandoned;
-            NotifyPlaybackMethodChanged = PlaybackNotification.NotifyPlaybackMethodChanged;
-            NotifyPlaybackMilestones = PlaybackNotification.NotifyPlaybackMilestones;
-            PlaybackMilestones = PlaybackNotification.PlaybackMilestones ?? "25,50,75";
-            MinimumStopSeconds = PlaybackNotification.MinimumStopSeconds;
-            CompletionThresholdPercent = PlaybackNotification.CompletionThresholdPercent;
-            OnlyVideo = PlaybackNotification.OnlyVideo;
-
-            // 登录与用户
-            NotifyAuthenticationSucceeded = LoginAndUser.NotifyAuthenticationSucceeded;
-            NotifyAuthenticationFailed = LoginAndUser.NotifyAuthenticationFailed;
-            NotifyUserLockedOut = LoginAndUser.NotifyUserLockedOut;
-            NotifySessionStarted = LoginAndUser.NotifySessionStarted;
-            NotifySessionEnded = LoginAndUser.NotifySessionEnded;
-            NotifyRemoteControlDisconnected = LoginAndUser.NotifyRemoteControlDisconnected;
-            NotifyPartyJoined = LoginAndUser.NotifyPartyJoined;
-            NotifyPartyLeft = LoginAndUser.NotifyPartyLeft;
-            NotifyUserPasswordChanged = LoginAndUser.NotifyUserPasswordChanged;
-            NotifyUserCreated = LoginAndUser.NotifyUserCreated;
-            NotifyUserDeleted = LoginAndUser.NotifyUserDeleted;
-            NotifyUserUpdated = LoginAndUser.NotifyUserUpdated;
-            NotifyUserPolicyUpdated = LoginAndUser.NotifyUserPolicyUpdated;
-            NotifyUserConfigurationUpdated = LoginAndUser.NotifyUserConfigurationUpdated;
-            UserFilterMode = LoginAndUser.UserFilterMode;
-            UserNames = LoginAndUser.UserNames ?? "";
-
-            // 媒体库与用户行为
-            NotifyNewMovies = LibraryAndUserBehavior.NotifyNewMovies;
-            NotifyNewEpisodes = LibraryAndUserBehavior.NotifyNewEpisodes;
-            NotifyNewMusic = LibraryAndUserBehavior.NotifyNewMusic;
-            NotifyOtherNewItems = LibraryAndUserBehavior.NotifyOtherNewItems;
-            NotifyItemsRemoved = LibraryAndUserBehavior.NotifyItemsRemoved;
-            NotifyItemsUpdated = LibraryAndUserBehavior.NotifyItemsUpdated;
-            EnableLibraryAggregation = LibraryAndUserBehavior.EnableLibraryAggregation;
-            LibraryAggregationWindowSeconds = LibraryAndUserBehavior.LibraryAggregationWindowSeconds;
-            MaximumIndividualLibraryMessages = LibraryAndUserBehavior.MaximumIndividualLibraryMessages;
-            NotifyFavoriteAdded = LibraryAndUserBehavior.NotifyFavoriteAdded;
-            NotifyFavoriteRemoved = LibraryAndUserBehavior.NotifyFavoriteRemoved;
-            NotifyMarkedPlayed = LibraryAndUserBehavior.NotifyMarkedPlayed;
-            NotifyMarkedUnplayed = LibraryAndUserBehavior.NotifyMarkedUnplayed;
-            NotifyUserRatingChanged = LibraryAndUserBehavior.NotifyUserRatingChanged;
-
-            // 任务、Live TV 与服务器
-            NotifyTaskFailed = TaskAndLiveTvAndServer.NotifyTaskFailed;
-            NotifyTaskCompleted = TaskAndLiveTvAndServer.NotifyTaskCompleted;
-            NotifyTaskCancelled = TaskAndLiveTvAndServer.NotifyTaskCancelled;
-            NotifyLibraryScanStarted = TaskAndLiveTvAndServer.NotifyLibraryScanStarted;
-            NotifyLibraryScanCompleted = TaskAndLiveTvAndServer.NotifyLibraryScanCompleted;
-            NotifyMetadataRefreshCompleted = TaskAndLiveTvAndServer.NotifyMetadataRefreshCompleted;
-            NotifyBackupCompleted = TaskAndLiveTvAndServer.NotifyBackupCompleted;
-            EnableLiveTvNotifications = TaskAndLiveTvAndServer.EnableLiveTvNotifications;
-            NotifyRecordingStarted = TaskAndLiveTvAndServer.NotifyRecordingStarted;
-            NotifyRecordingEnded = TaskAndLiveTvAndServer.NotifyRecordingEnded;
-            NotifyTimerCreated = TaskAndLiveTvAndServer.NotifyTimerCreated;
-            NotifyTimerUpdated = TaskAndLiveTvAndServer.NotifyTimerUpdated;
-            NotifyTimerCancelled = TaskAndLiveTvAndServer.NotifyTimerCancelled;
-            NotifySeriesTimerCreated = TaskAndLiveTvAndServer.NotifySeriesTimerCreated;
-            NotifySeriesTimerUpdated = TaskAndLiveTvAndServer.NotifySeriesTimerUpdated;
-            NotifySeriesTimerCancelled = TaskAndLiveTvAndServer.NotifySeriesTimerCancelled;
-            NotifyServerStarted = TaskAndLiveTvAndServer.NotifyServerStarted;
-            NotifyServerStopping = TaskAndLiveTvAndServer.NotifyServerStopping;
-            NotifyUpdateAvailable = TaskAndLiveTvAndServer.NotifyUpdateAvailable;
-            NotifyApplicationUpdated = TaskAndLiveTvAndServer.NotifyApplicationUpdated;
-            NotifyRestartRequired = TaskAndLiveTvAndServer.NotifyRestartRequired;
-            NotifyMaintenanceModeEntered = TaskAndLiveTvAndServer.NotifyMaintenanceModeEntered;
-            NotifyMaintenanceModeExited = TaskAndLiveTvAndServer.NotifyMaintenanceModeExited;
-
-            // 高级与诊断
-            MaximumNotificationsPerMinute = AdvancedAndDiagnostics.MaximumNotificationsPerMinute;
-            SecurityEventsBypassRateLimit = AdvancedAndDiagnostics.SecurityEventsBypassRateLimit;
-            AggregateWhenRateLimited = AdvancedAndDiagnostics.AggregateWhenRateLimited;
-            SendTestNotification = AdvancedAndDiagnostics.SendTestNotification;
-            LastTestResult = AdvancedAndDiagnostics.LastTestResult ?? "";
+            Configuration.ConfigSynchronizer.CopyFromGroups(this);
         }
 
         /// <summary>

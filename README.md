@@ -1,7 +1,7 @@
 # EmbyFeishu — Emby 飞书通知插件
 
-![release](https://img.shields.io/badge/release-v1.4.0.0-blue)
-![License](https://img.shields.io/badge/license-Personal%20Use-lightgrey)
+![release](https://img.shields.io/badge/release-v1.4.1.0-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
 ![.NET](https://img.shields.io/badge/.NET-netstandard2.0-512BD4)
 ![Emby](https://img.shields.io/badge/Emby-4.9.5.0-green)
 
@@ -34,7 +34,7 @@
 # 编译插件（Release）
 dotnet build src/EmbyFeishu/EmbyFeishu.csproj -c Release
 
-# 运行自测（235 项）
+# 运行自测（237 项）
 dotnet run --project tools/EmbyFeishu.SelfTest/EmbyFeishu.SelfTest.csproj -c Release
 ```
 
@@ -83,6 +83,6 @@ dotnet run --project tools/EmbyFeishu.SelfTest/EmbyFeishu.SelfTest.csproj -c Rel
 
 ## 📄 许可
 
-本项目仅供个人学习和使用，任何商业用途需单独授权。
+本项目基于 [MIT License](LICENSE) 开源。
 
-**版本**：v1.4.0.0 ｜ **最后更新**：2026-07-12
+**版本**：v1.4.1.0 ｜ **最后更新**：2026-07-17

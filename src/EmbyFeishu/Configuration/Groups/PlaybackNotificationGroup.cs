@@ -12,10 +12,15 @@ namespace EmbyFeishu.Configuration.Groups
     {
         public override string EditorTitle => "播放通知";
 
+        public override string EditorDescription
+            => "控制用户播放媒体时触发哪些通知。常用组合：开始+停止 或 开始+完成";
+
         [DisplayName("通知播放开始")]
+        [Description("用户开始播放任意媒体时推送通知")]
         public bool NotifyPlaybackStarted { get; set; } = true;
 
         [DisplayName("通知播放停止")]
+        [Description("用户主动或自动停止播放时推送通知（包括完成和中途退出）")]
         public bool NotifyPlaybackStopped { get; set; } = true;
 
         [DisplayName("通知播放暂停")]

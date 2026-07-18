@@ -2,6 +2,6 @@
   <PropertyGroup>
     <EmbyReferencePath Condition="'$(EmbyReferencePath)' == ''">$(MSBuildThisFileDirectory)lib\emby\4.9.5.0</EmbyReferencePath>
     <!-- 插件版本的唯一来源。升级版本只需修改此处。 -->
-    <EmbyFeishuVersion>1.4.0.0</EmbyFeishuVersion>
+    <EmbyFeishuVersion>1.5.0.0</EmbyFeishuVersion>
   </PropertyGroup>
 </Project>

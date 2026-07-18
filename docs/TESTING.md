@@ -12,15 +12,15 @@ dotnet build EmbyFeishu.sln -c Release
 dotnet run --project tools/EmbyFeishu.SelfTest/EmbyFeishu.SelfTest.csproj -c Release --no-build
 ```
 
-最新结果（v1.4.0.0）：
+最新结果（v1.4.1.0）：
 
 ```
 ========================================
-  结果: 通过 235, 失败 0
+  结果: 通过 237, 失败 0
 ========================================
 ```
 
-### 测试覆盖（共 235 项，全部通过）
+### 测试覆盖（共 237 项，全部通过）
 
 **媒体标题格式化**：电影 / 剧集（含/无季集号）/ 空值降级。
 

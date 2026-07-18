@@ -40,6 +40,7 @@ namespace EmbyFeishu
         private readonly LibraryAggregator _aggregator;
         private readonly FeishuWebhookClient _webhookClient;
         private readonly NotificationContext _context;
+        private readonly NotificationStatistics _statistics;
         private readonly List<IEventSource> _sources = new List<IEventSource>();
         private UserDataEventSource _userDataSource;
 
@@ -68,6 +69,7 @@ namespace EmbyFeishu
 
             _stateTracker = new PlaybackStateTracker();
             _policy = new NotificationPolicy();
+            _statistics = new NotificationStatistics();
             _webhookClient = new FeishuWebhookClient(_httpClient, _jsonSerializer, _logger);
             _dispatcher = new NotificationDispatcher(
                 _webhookClient,
@@ -76,7 +78,8 @@ namespace EmbyFeishu
                 new FeishuMessageSecurityDecorator(
                     new FeishuSignatureProvider(),
                     new SystemUnixTimeProvider()),
-                _logger);
+                _logger,
+                _statistics);
 
             _context = new NotificationContext(
                 _logger,
@@ -194,6 +197,21 @@ namespace EmbyFeishu
             try { _stateTracker.CleanupStale(); } catch (Exception ex) { _logger.Debug("[EmbyFeishu] 清理会话异常: {0}", ex.Message); }
             try { _userDataSource?.CleanupStale(); } catch (Exception ex) { _logger.Debug("[EmbyFeishu] 清理用户数据缓存异常: {0}", ex.Message); }
             try { _policy.CleanupStale(); } catch (Exception ex) { _logger.Debug("[EmbyFeishu] 清理策略缓存异常: {0}", ex.Message); }
+
+            // 更新诊断信息到配置（下次打开配置页时可见）
+            try
+            {
+                var diagOptions = Plugin.Instance?.GetPluginOptions();
+                if (diagOptions != null)
+                {
+                    diagOptions.EnsureGroups();
+                    diagOptions.AdvancedAndDiagnostics.DiagnosticInfo = _statistics.GetDiagnosticSummary();
+                    diagOptions.AdvancedAndDiagnostics.WebhookHealthStatus = _statistics.GetHealthStatus();
+                    diagOptions.DiagnosticInfo = diagOptions.AdvancedAndDiagnostics.DiagnosticInfo;
+                    diagOptions.WebhookHealthStatus = diagOptions.AdvancedAndDiagnostics.WebhookHealthStatus;
+                }
+            }
+            catch (Exception ex) { _logger.Debug("[EmbyFeishu] 更新诊断信息异常: {0}", ex.Message); }
 
             // 汇总被限流抑制的通知数量
             try

@@ -1,4 +1,5 @@
 using System;
+using System.Text.RegularExpressions;
 using EmbyFeishu.Models;
 
 namespace EmbyFeishu.Infrastructure
@@ -8,6 +9,8 @@ namespace EmbyFeishu.Infrastructure
     /// </summary>
     public class SensitiveDataSanitizer : ISensitiveDataSanitizer
     {
+        private static readonly Regex WindowsPathRegex = new Regex(@"[A-Za-z]:\\[^\s""'<>|]+", RegexOptions.Compiled);
+        private static readonly Regex UnixPathRegex = new Regex(@"(?<![A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=-])/(?:[^/\s""'<>|]+/){2,}[^/\s""'<>|]+", RegexOptions.Compiled);
         public string SanitizeWebhook(string webhookUrl)
         {
             return WebhookMasker.Mask(webhookUrl);
@@ -125,17 +128,13 @@ namespace EmbyFeishu.Infrastructure
 
             try
             {
-                // Windows 盘符路径 C:\a\b\c -> …\c
-                var winPattern = new System.Text.RegularExpressions.Regex(@"[A-Za-z]:\\[^\s""'<>|]+");
-                text = winPattern.Replace(text, m =>
+                text = WindowsPathRegex.Replace(text, m =>
                 {
                     var idx = m.Value.LastIndexOf('\\');
                     return idx >= 0 ? "…\\" + m.Value.Substring(idx + 1) : m.Value;
                 });
 
-                // Unix 绝对路径 /a/b/c -> …/c （至少两级，避免误伤普通 URL 路径片段）
-                var unixPattern = new System.Text.RegularExpressions.Regex(@"(?<![A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=-])/(?:[^/\s""'<>|]+/){2,}[^/\s""'<>|]+");
-                text = unixPattern.Replace(text, m =>
+                text = UnixPathRegex.Replace(text, m =>
                 {
                     var idx = m.Value.LastIndexOf('/');
                     return idx >= 0 ? "…/" + m.Value.Substring(idx + 1) : m.Value;
